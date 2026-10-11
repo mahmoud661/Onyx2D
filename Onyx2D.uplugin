@@ -1,0 +1,21 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Onyx2D",
+	"Description": "Complete 2D game framework: platformer movement, flipbook animation, combat, camera, 2D lights and shadows, parallax, level prototyping and ready-made UI.",
+	"Category": "2D",
+	"CreatedBy": "Onyx2D",
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"Modules": [
+		{ "Name": "Onyx2DRuntime", "Type": "Runtime", "LoadingPhase": "Default" },
+		{ "Name": "Onyx2DUI", "Type": "Runtime", "LoadingPhase": "Default" },
+		{ "Name": "Onyx2DEditor", "Type": "Editor", "LoadingPhase": "Default" }
+	],
+	"Plugins": [
+		{ "Name": "Paper2D", "Enabled": true },
+		{ "Name": "EnhancedInput", "Enabled": true },
+		{ "Name": "ProceduralMeshComponent", "Enabled": true }
+	]
+}

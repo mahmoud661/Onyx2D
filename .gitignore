@@ -1,0 +1,14 @@
+# Build output (generated when the plugin compiles)
+Binaries/
+Intermediate/
+
+# Editor / IDE files
+.vs/
+.vscode/
+*.sln
+*.suo
+*.VC.db
+*.opensdf
+*.sdf
+.DS_Store
+Thumbs.db
