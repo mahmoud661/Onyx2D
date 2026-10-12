@@ -9,11 +9,12 @@
 class UBoxComponent;
 class UOnyxCameraProfile;
 class UOnyxLightingProfile;
+class USoundBase;
 
 /**
  * Camera Zone: while the player is inside this box (XZ) the camera can be confined to it, switch to another
  * Camera Profile (zoom out in a big room...), frame extra actors (a boss) and change the lighting mood
- * (enter a cave and it gets dark). Everything blends smoothly.
+ * (enter a cave and it gets dark) and the music / ambience. Everything blends smoothly.
  */
 UCLASS(meta = (DisplayName = "Onyx Camera Zone"))
 class ONYX2DRUNTIME_API AOnyxCameraBounds : public AActor
@@ -53,6 +54,18 @@ public:
 	/** Seconds to fade into and out of this zone's lighting. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Lighting", meta = (ClampMin = "0"))
 	float LightingBlendTime = 1.5f;
+
+	/** Music while the player is inside (empty = keep the level's). Crossfades in and back out. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Audio")
+	TObjectPtr<USoundBase> Music;
+
+	/** Ambience loop while the player is inside (cave drips, wind), replacing the level's. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Audio")
+	TObjectPtr<USoundBase> Ambience;
+
+	/** Seconds of crossfade when entering or leaving. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Audio", meta = (ClampMin = "0", Units = "s"))
+	float AudioFadeTime = 1.5f;
 
 	/** Does this zone change anything about the camera (confine, profile, framing)? */
 	bool AffectsCamera() const { return bConfine || Profile != nullptr || !FocusActors.IsEmpty(); }

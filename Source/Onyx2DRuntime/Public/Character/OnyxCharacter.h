@@ -8,17 +8,48 @@
 #include "Core/Onyx2DTypes.h"
 #include "OnyxCharacter.generated.h"
 
-class UOnyxAnimatorComponent;
+class UOnyxMovesetComponent;
 class UOnyxCombatComponent;
 class UOnyxHealthComponent;
 class UOnyxHitboxComponent;
 class UOnyxMovementComponent;
 class UPaperFlipbook;
+class USoundBase;
 class UStaticMeshComponent;
 
+/** Sounds a character makes by itself (footsteps and attack swings go in its clips as Sound events). */
+USTRUCT(BlueprintType)
+struct ONYX2DRUNTIME_API FOnyxCharacterSounds
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Sounds")
+	TObjectPtr<USoundBase> Jump;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Sounds")
+	TObjectPtr<USoundBase> Land;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Sounds")
+	TObjectPtr<USoundBase> Dash;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Sounds")
+	TObjectPtr<USoundBase> Hurt;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Sounds")
+	TObjectPtr<USoundBase> Death;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Sounds", meta = (ClampMin = "0", ClampMax = "2"))
+	float Volume = 1.f;
+
+	/** Random pitch change each time (+/-), so repeated sounds don't feel mechanical. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Sounds", meta = (ClampMin = "0", ClampMax = "0.5"))
+	float PitchVariation = 0.06f;
+};
+
 /**
- * Base 2D character: platformer movement, health, flipbook animator, melee combat and a team.
- * Each feature lives in its own component; this class only wires them together.
+ * A 2D character: platformer movement, health, moveset, melee combat and a team. Each feature is its own component and
+ * this class only wires them together. What drives it and how it behaves are components too: add Player Control
+ * (+ Camera, Respawn) for the hero, Patrol + Contact Damage (+ Stompable) for a foe, or your own.
  */
 UCLASS()
 class ONYX2DRUNTIME_API AOnyxCharacter : public APaperCharacter, public IOnyxDamageable, public IOnyxTeamMember
@@ -31,8 +62,9 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Onyx2D")
 	TObjectPtr<UOnyxHealthComponent> Health;
 
+	/** Plays the character's Moveset (its clips by role) on the sprite. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Onyx2D")
-	TObjectPtr<UOnyxAnimatorComponent> Animator;
+	TObjectPtr<UOnyxMovesetComponent> MovesetComponent;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Onyx2D")
 	TObjectPtr<UOnyxCombatComponent> Combat;
@@ -87,11 +119,29 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Health", meta = (ClampMin = "0"))
 	float FallDeathDepth = 400.f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Animation")
-	FName HurtAnimation = TEXT("Hurt");
+	/** Moveset role played when hurt. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Moveset")
+	FName HurtClip = TEXT("Hurt");
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Animation")
-	FName DeathAnimation = TEXT("Death");
+	/** Moveset role played on death. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Moveset")
+	FName DeathClip = TEXT("Death");
+
+	/** Jump, land, dash, hurt and death sounds. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Sounds")
+	FOnyxCharacterSounds Sounds;
+
+	/** Plays one of its sounds at the character (with a little pitch variation). */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Sounds")
+	void PlayCharacterSound(USoundBase* Sound) const;
+
+	/** Played once where it dies (a puff, an explosion); the body disappears at once when set. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Health")
+	TObjectPtr<UPaperFlipbook> DeathEffect;
+
+	/** Seconds the body stays after death (0 = forever). Ignored by characters that respawn. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Health", meta = (ClampMin = "0", Units = "s"))
+	float CorpseLifetime = 1.f;
 
 	UFUNCTION(BlueprintPure, Category = "Onyx2D")
 	UOnyxMovementComponent* GetOnyxMovement() const;
@@ -122,9 +172,18 @@ protected:
 	/** Kills the character when it falls below the playable area. */
 	void CheckFallDeath();
 
-	/** Called when health reaches zero. Base: stops combat, plays the death animation, fires OnDied. */
+	/** Called when health reaches zero. Base: stops combat, plays the Death clip, fires OnDied. */
 	UFUNCTION()
 	virtual void HandleDeath(AActor* Killer);
+
+	UFUNCTION()
+	void HandleJumpSound();
+
+	UFUNCTION()
+	void HandleLandSound();
+
+	UFUNCTION()
+	void HandleDashSound();
 
 	/** Chooses facing each frame (movement input / velocity). Skipped while attacking. */
 	virtual void UpdateFacing();
@@ -136,7 +195,7 @@ public:
 
 private:
 	void ApplyFacing();
-	/** Shows the coloured stand-in body only while the character has no animation. */
+	/** Shows the coloured stand-in body only while the character has no flipbook. */
 	void UpdatePlaceholder();
 
 	/** Puts the sprite back on whole art pixels this frame (see bPixelSnapSprite). */

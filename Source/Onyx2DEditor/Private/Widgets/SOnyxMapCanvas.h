@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Assets/OnyxMapPainter.h"
+#include "Level/OnyxMapPainter.h"
 #include "PaperTileLayer.h"
 #include "Widgets/SLeafWidget.h"
 

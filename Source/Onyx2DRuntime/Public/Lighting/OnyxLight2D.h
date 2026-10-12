@@ -7,7 +7,9 @@
 #include "GameFramework/Actor.h"
 #include "OnyxLight2D.generated.h"
 
+class UAudioComponent;
 class UMaterialInstanceDynamic;
+class USoundBase;
 class UOnyxLight2DComponent;
 class UStaticMeshComponent;
 
@@ -117,11 +119,33 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Halo", meta = (ClampMin = "0.5", UIMax = "8", EditCondition = "bShowHalo"))
 	float HaloFalloff = 3.f;
 
+	/** Looping sound at the light (a crackling torch, a humming lamp), quieter with distance; stops when the light is off. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Sound")
+	TObjectPtr<USoundBase> AmbientSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Sound", meta = (ClampMin = "0", ClampMax = "2"))
+	float SoundVolume = 0.6f;
+
+	/** Played when the light is switched on / off (a click, a whoosh of fire). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Sound")
+	TObjectPtr<USoundBase> SwitchSound;
+
+	/** Turns the light (and its halo and sound) on or off with a fade. */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D")
+	void SetLightEnabled(bool bEnabled, float FadeTime = 0.25f);
+
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D")
+	void ToggleLight(float FadeTime = 0.25f);
+
+	UFUNCTION(BlueprintPure, Category = "Onyx2D")
+	bool IsLightEnabled() const;
+
 	/** Applies one of the ready-made looks. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D")
 	void ApplyPreset(EOnyxLightPreset NewPreset);
 
 	virtual void OnConstruction(const FTransform& Transform) override;
+	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& Event) override;
@@ -132,4 +156,7 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> HaloMaterial;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> SoundLoop;
 };

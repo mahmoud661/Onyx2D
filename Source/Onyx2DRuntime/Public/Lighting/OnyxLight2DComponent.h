@@ -46,17 +46,41 @@ public:
 	UPROPERTY(BlueprintReadWrite, Transient, Category = "Light 2D")
 	float IntensityScale = 1.f;
 
+	/** Lit when the level starts (switch it with Set Light Enabled). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Light 2D")
+	bool bStartEnabled = true;
+
+	/** Turns the light on or off, fading over FadeTime seconds (0 = at once). */
+	UFUNCTION(BlueprintCallable, Category = "Light 2D")
+	void SetLightEnabled(bool bEnabled, float FadeTime = 0.25f);
+
+	UFUNCTION(BlueprintCallable, Category = "Light 2D")
+	void ToggleLight(float FadeTime = 0.25f) { SetLightEnabled(!IsLightEnabled(), FadeTime); }
+
+	UFUNCTION(BlueprintPure, Category = "Light 2D")
+	bool IsLightEnabled() const { return bEnabledTarget; }
+
+	/** 0 = off, 1 = on (in between while fading). */
+	float GetEnabledAlpha() const { return EnabledAlpha; }
+
 	/** Final brightness this frame. */
-	float GetEffectiveIntensity() const { return Intensity * IntensityScale; }
+	float GetEffectiveIntensity() const { return Intensity * IntensityScale * EnabledAlpha; }
 	/** Light position on the 2D plane (X right, Y up). */
 	FVector2D GetPlanePosition() const;
 	/** Cone direction on the 2D plane. */
 	FVector2D GetPlaneDirection() const;
 
 protected:
+	virtual void BeginPlay() override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void OnRegister() override;
 	virtual void OnUnregister() override;
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& Event) override;
 #endif
+
+private:
+	float EnabledAlpha = 1.f;
+	float FadeSpeed = 0.f;
+	bool bEnabledTarget = true;
 };

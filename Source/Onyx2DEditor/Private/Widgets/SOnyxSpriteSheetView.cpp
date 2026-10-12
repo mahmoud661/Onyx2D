@@ -5,7 +5,7 @@
 #include "Rendering/DrawElements.h"
 #include "Styling/AppStyle.h"
 #include "Styling/CoreStyle.h"
-#include "Widgets/OnyxToolWidgets.h"
+#include "ToolsWindow/OnyxToolWidgets.h"
 
 namespace
 {

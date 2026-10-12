@@ -1,6 +1,9 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "Lighting/OnyxLight2D.h"
+#include "Sound/SoundBase.h"
+#include "Audio/OnyxAudioSubsystem.h"
+#include "Components/AudioComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Core/Onyx2DSettings.h"
@@ -162,17 +165,63 @@ void AOnyxLight2D::UpdateHalo()
 	const float Diameter = Light2D->Radius * HaloSize;
 	Halo->SetRelativeScale3D(FVector(Diameter / PlaneMeshSize, Diameter / PlaneMeshSize, 1.f));
 	HaloMaterial->SetVectorParameterValue(HaloColorParam, Light2D->Color);
-	HaloMaterial->SetScalarParameterValue(HaloIntensityParam, HaloIntensity * Light2D->IntensityScale);
+	HaloMaterial->SetScalarParameterValue(HaloIntensityParam, HaloIntensity * Light2D->IntensityScale * Light2D->GetEnabledAlpha());
 	HaloMaterial->SetScalarParameterValue(HaloFalloffParam, HaloFalloff);
+}
+
+void AOnyxLight2D::BeginPlay()
+{
+	Super::BeginPlay();
+	if (AmbientSound && Light2D->bStartEnabled)
+	{
+		SoundLoop = UOnyxAudioSubsystem::PlaySoundAttached(AmbientSound, RootComponent, EOnyxSoundCategory::Effects, SoundVolume);
+	}
+}
+
+void AOnyxLight2D::SetLightEnabled(bool bEnabled, float FadeTime)
+{
+	if (bEnabled == Light2D->IsLightEnabled())
+	{
+		return;
+	}
+	Light2D->SetLightEnabled(bEnabled, FadeTime);
+	UOnyxAudioSubsystem::PlaySoundAt(this, SwitchSound, GetActorLocation());
+	if (bEnabled && AmbientSound)
+	{
+		if (!SoundLoop)
+		{
+			SoundLoop = UOnyxAudioSubsystem::PlaySoundAttached(AmbientSound, RootComponent, EOnyxSoundCategory::Effects, SoundVolume);
+		}
+		else
+		{
+			SoundLoop->FadeIn(FMath::Max(FadeTime, 0.05f), 1.f);
+		}
+	}
+	else if (!bEnabled && SoundLoop)
+	{
+		SoundLoop->FadeOut(FMath::Max(FadeTime, 0.05f), 0.f);
+	}
+	SetActorTickEnabled(true); // the halo follows the fade
+}
+
+void AOnyxLight2D::ToggleLight(float FadeTime)
+{
+	SetLightEnabled(!IsLightEnabled(), FadeTime);
+}
+
+bool AOnyxLight2D::IsLightEnabled() const
+{
+	return Light2D->IsLightEnabled();
 }
 
 void AOnyxLight2D::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	// The halo breathes with the light.
+	// The halo breathes with the light (and fades with it).
+	Halo->SetVisibility(bShowHalo && HaloMaterial && Light2D->GetEnabledAlpha() > 0.f);
 	if (bShowHalo && HaloMaterial)
 	{
-		HaloMaterial->SetScalarParameterValue(HaloIntensityParam, HaloIntensity * Light2D->IntensityScale);
+		HaloMaterial->SetScalarParameterValue(HaloIntensityParam, HaloIntensity * Light2D->IntensityScale * Light2D->GetEnabledAlpha());
 	}
 }
 

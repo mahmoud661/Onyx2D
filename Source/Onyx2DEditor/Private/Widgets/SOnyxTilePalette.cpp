@@ -5,7 +5,7 @@
 #include "PaperTileSet.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/AppStyle.h"
-#include "Widgets/OnyxToolWidgets.h"
+#include "ToolsWindow/OnyxToolWidgets.h"
 #include "World/OnyxTileCollision.h"
 
 namespace

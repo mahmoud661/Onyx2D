@@ -2,18 +2,28 @@
 
 #include "Examples/OnyxSunnyLandExample.h"
 #include "AI/OnyxPatrolComponent.h"
+#include "Animation/OnyxClip.h"
+#include "Animation/OnyxClipEvent.h"
+#include "Animation/OnyxClipWindow.h"
+#include "Animation/OnyxMoveset.h"
+#include "Animation/OnyxMovesetComponent.h"
 #include "AssetImportTask.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetToolsModule.h"
-#include "Assets/OnyxAssetFactory.h"
-#include "Assets/OnyxFramePacker.h"
-#include "Assets/OnyxBrushLibrary.h"
-#include "Assets/OnyxLevelTools.h"
-#include "Assets/OnyxMapPainter.h"
+#include "Builders/OnyxAssetUtils.h"
+#include "Audio/OnyxLevelAudio.h"
+#include "Sound/SoundWave.h"
+#include "Builders/OnyxFramePacker.h"
+#include "Level/OnyxBrushLibrary.h"
+#include "Level/OnyxLevelTools.h"
+#include "Level/OnyxMapPainter.h"
 #include "Camera/OnyxCameraBounds.h"
 #include "Camera/OnyxCameraComponent.h"
-#include "Character/OnyxEnemyCharacter.h"
-#include "Character/OnyxPlayerCharacter.h"
+#include "Builders/OnyxAssetUtils.h"
+#include "Character/OnyxBehaviourLibrary.h"
+#include "Character/OnyxCharacter.h"
+#include "Combat/OnyxCombatTypes.h"
+#include "Character/OnyxPlayerControlComponent.h"
 #include "Combat/OnyxHealthComponent.h"
 #include "Combat/OnyxHitboxComponent.h"
 #include "Components/BoxComponent.h"
@@ -54,8 +64,8 @@ namespace
 {
 	const TCHAR* Root = TEXT("/Game/SunnyLand");
 	constexpr float CmPerPixel = 4.f;
-	constexpr int32 Tile = 16;
-	constexpr float TileWorld = Tile * CmPerPixel;
+	constexpr int32 TilePixels = 16;
+	constexpr float TileWorld = TilePixels * CmPerPixel;
 	constexpr int32 MapHeightTiles = 25;
 
 	// Collision lists from the original game (Phaser tile ids are 1-based).
@@ -77,7 +87,7 @@ namespace
 
 	FVector TileCenter(float TileX, float TileY)
 	{
-		return WorldAt(TileX * Tile, TileY * Tile);
+		return WorldAt(TileX * TilePixels, TileY * TilePixels);
 	}
 
 	/** Builds the example step by step; each step reports failures through Error. */
@@ -94,7 +104,7 @@ namespace
 		UTexture2D* Strip(const TArray<UTexture2D*>& Frames, const FString& Name, FIntPoint& OutFrameSize);
 		UPaperFlipbook* Flipbook(const TArray<UTexture2D*>& Frames, const FString& Name, float FramesPerSecond);
 		UBlueprint* MakeEnemy(const FString& Name, const TMap<FName, UTexture2D*>& Strips, const TMap<FName, float>& Speeds, FIntPoint FrameSize,
-			TFunctionRef<void(AOnyxEnemyCharacter&, UOnyxPatrolComponent&)> Setup);
+			TFunctionRef<void(AOnyxCharacter&, UOnyxPatrolComponent&)> Setup);
 		template <class T>
 		T* Spawn(UWorld* World, const FVector& Location, const FString& Label);
 		bool Fail(const FText& Reason) { Error = Reason; return false; }
@@ -169,23 +179,61 @@ namespace
 		return UOnyxEditorLibrary::CreateFlipbookFromCells(Texture, FrameSize, Cells, Name, FString(Root) / TEXT("Effects"), CmPerPixel, FramesPerSecond);
 	}
 
-	UBlueprint* FBuilder::MakeEnemy(const FString& Name, const TMap<FName, UTexture2D*>& Strips, const TMap<FName, float>& Speeds, FIntPoint FrameSize,
-		TFunctionRef<void(AOnyxEnemyCharacter&, UOnyxPatrolComponent&)> Setup)
+	/** Shows the timeline at work on the fox: a Footstep message twice per run cycle, invulnerable while hurt. */
+	void AddFoxTimelineEvents(UBlueprint* Fox, TArray<UPackage*>& Dirty)
 	{
-		UBlueprint* Blueprint = UOnyxEditorLibrary::CreateCharacterFromStrips(Strips, Name, FString(Root) / TEXT("Characters"), FrameSize, false, CmPerPixel, Speeds);
-		AOnyxEnemyCharacter* Enemy = Blueprint ? Cast<AOnyxEnemyCharacter>(Blueprint->GeneratedClass->GetDefaultObject()) : nullptr;
-		if (!Enemy)
+		const AOnyxCharacter* Defaults = Fox && Fox->GeneratedClass ? Fox->GeneratedClass->GetDefaultObject<AOnyxCharacter>() : nullptr;
+		UOnyxMoveset* Moveset = Defaults && Defaults->MovesetComponent ? Defaults->MovesetComponent->Moveset.Get() : nullptr;
+		if (!Moveset)
+		{
+			return;
+		}
+		Moveset->AddMessage(TEXT("Footstep"));
+		Dirty.Add(Moveset->GetPackage());
+		if (UOnyxClip* Run = Moveset->FindClip(TEXT("Run")); Run && Run->Events.IsEmpty() && Run->GetFrameUnits() >= 4)
+		{
+			Run->Lanes[0].Name = TEXT("Gameplay");
+			const float Frame = 1.f / Run->GetFramesPerSecond();
+			for (const int32 StepFrame : { 1, Run->GetFrameUnits() / 2 + 1 })
+			{
+				if (UOnyxClipEvent_Message* Step = Cast<UOnyxClipEvent_Message>(Run->AddEvent(UOnyxClipEvent_Message::StaticClass(), StepFrame * Frame, 0)))
+				{
+					Step->Message = TEXT("Footstep");
+				}
+			}
+			Run->MarkPackageDirty();
+			Dirty.Add(Run->GetPackage());
+		}
+		if (UOnyxClip* Hurt = Moveset->FindClip(TEXT("Hurt")); Hurt && Hurt->Events.IsEmpty())
+		{
+			if (UOnyxClipWindow* Window = Cast<UOnyxClipWindow>(Hurt->AddEvent(UOnyxClipWindow_Invulnerable::StaticClass(), 0.f, 0)))
+			{
+				Window->Length = FMath::Max(Hurt->GetLength(), UOnyxClipWindow::ShortestLength);
+			}
+			Hurt->MarkPackageDirty();
+			Dirty.Add(Hurt->GetPackage());
+		}
+	}
+
+	UBlueprint* FBuilder::MakeEnemy(const FString& Name, const TMap<FName, UTexture2D*>& Strips, const TMap<FName, float>& Speeds, FIntPoint FrameSize,
+		TFunctionRef<void(AOnyxCharacter&, UOnyxPatrolComponent&)> Setup)
+	{
+		// A plain character with the patrolling-foe behaviours (Patrol, Contact Damage, Stompable).
+		UBlueprint* Blueprint = UOnyxEditorLibrary::CreateCharacterFromStrips(Strips, Name, FString(Root) / TEXT("Characters"), FrameSize,
+			int32(UOnyxBehaviourLibrary::PatrolFoePreset), OnyxTeams::Enemy, CmPerPixel, Speeds);
+		AOnyxCharacter* Enemy = Blueprint ? Cast<AOnyxCharacter>(Blueprint->GeneratedClass->GetDefaultObject()) : nullptr;
+		UOnyxPatrolComponent* Patrol = FOnyxAssetUtils::FindComponentTemplate<UOnyxPatrolComponent>(Blueprint);
+		if (!Enemy || !Patrol)
 		{
 			Fail(FText::Format(INVTEXT("Could not create the {0} enemy."), FText::FromString(Name)));
 			return nullptr;
 		}
 		Enemy->Modify();
+		Patrol->Modify();
 		Enemy->bArtFacesLeft = true;
 		Enemy->DeathEffect = EnemyDeath;
 		Enemy->Health->MaxHealth = 1.f;
-		const UCapsuleComponent* Capsule = Enemy->GetCapsuleComponent();
-		Enemy->ContactHitbox->SetBoxExtent(FVector(Capsule->GetUnscaledCapsuleRadius() + 6.f, 50.f, Capsule->GetUnscaledCapsuleHalfHeight() + 4.f));
-		Setup(*Enemy, *Enemy->Patrol);
+		Setup(*Enemy, *Patrol);
 		Blueprint->MarkPackageDirty();
 		Dirty.Add(Blueprint->GetPackage());
 		return Blueprint;
@@ -227,19 +275,22 @@ namespace
 		}
 		FoxStrips.Add(TEXT("Jump"), Strip({ Jump[0] }, TEXT("T_Fox_Jump"), FrameSize));
 		FoxStrips.Add(TEXT("Fall"), Strip({ Jump[1] }, TEXT("T_Fox_Fall"), FrameSize));
-		UBlueprint* Fox = UOnyxEditorLibrary::CreateCharacterFromStrips(FoxStrips, TEXT("Fox"), FString(Root) / TEXT("Characters"), FrameSize, true, CmPerPixel, FoxSpeeds);
-		AOnyxPlayerCharacter* FoxDefaults = Fox ? Cast<AOnyxPlayerCharacter>(Fox->GeneratedClass->GetDefaultObject()) : nullptr;
-		if (!FoxDefaults)
+		// The hero: a plain character with Player Control, Camera and Respawn.
+		UBlueprint* Fox = UOnyxEditorLibrary::CreateCharacterFromStrips(FoxStrips, TEXT("Fox"), FString(Root) / TEXT("Characters"), FrameSize,
+			int32(UOnyxBehaviourLibrary::PlayerPreset), OnyxTeams::Player, CmPerPixel, FoxSpeeds);
+		UOnyxCameraComponent* FoxCamera = FOnyxAssetUtils::FindComponentTemplate<UOnyxCameraComponent>(Fox);
+		if (!FoxCamera)
 		{
 			return Fail(INVTEXT("Could not create the fox."));
 		}
-		FoxDefaults->Modify();
-		FOnyxCameraSettings& Camera = FoxDefaults->Camera->Settings;
+		FoxCamera->Modify();
+		FOnyxCameraSettings& Camera = FoxCamera->Settings;
 		Camera.ViewHeight = 900.f;        // about 14 tiles: the original game's framing
 		Camera.bPixelPerfect = true;       // whole screen pixels per art pixel: no shimmer, no seams
 		Camera.ArtPixelSize = CmPerPixel;
 		Fox->MarkPackageDirty();
 		Dirty.Add(Fox->GetPackage());
+		AddFoxTimelineEvents(Fox, Dirty);
 
 		// --- Enemies, items, effects ---------------------------------------------------------------
 		Progress.EnterProgressFrame(1.f, INVTEXT("Enemies and items"));
@@ -251,7 +302,7 @@ namespace
 		FIntPoint OpossumSize;
 		UTexture2D* OpossumStrip = Strip(ImportFrames(TEXT("opossum"), TEXT("opossum")), TEXT("T_Opossum_Run"), OpossumSize);
 		UBlueprint* Opossum = MakeEnemy(TEXT("Opossum"), { { TEXT("Idle"), OpossumStrip }, { TEXT("Run"), OpossumStrip } }, { { TEXT("Idle"), 12.f }, { TEXT("Run"), 12.f } }, OpossumSize,
-			[](AOnyxEnemyCharacter& Enemy, UOnyxPatrolComponent& Patrol)
+			[](AOnyxCharacter& Enemy, UOnyxPatrolComponent& Patrol)
 			{
 				Patrol.Style = EOnyxPatrolStyle::Walk;
 				Patrol.bChasePlayer = false;
@@ -261,7 +312,7 @@ namespace
 		FIntPoint EagleSize;
 		UTexture2D* EagleStrip = Strip(ImportFrames(TEXT("eagle"), TEXT("eagle")), TEXT("T_Eagle_Fly"), EagleSize);
 		UBlueprint* Eagle = MakeEnemy(TEXT("Eagle"), { { TEXT("Idle"), EagleStrip } }, { { TEXT("Idle"), 12.f } }, EagleSize,
-			[](AOnyxEnemyCharacter&, UOnyxPatrolComponent& Patrol)
+			[](AOnyxCharacter&, UOnyxPatrolComponent& Patrol)
 			{
 				Patrol.Style = EOnyxPatrolStyle::Fly;
 				Patrol.FlyRange = FVector2D(0.f, 400.f);
@@ -279,7 +330,7 @@ namespace
 		UBlueprint* Frog = MakeEnemy(TEXT("Frog"),
 			{ { TEXT("Idle"), FrogIdle }, { TEXT("Jump"), Strip({ FrogJump[0] }, TEXT("T_Frog_Jump"), Unused) }, { TEXT("Fall"), Strip({ FrogJump[1] }, TEXT("T_Frog_Fall"), Unused) } },
 			{ { TEXT("Idle"), 6.f } }, FrogSize,
-			[](AOnyxEnemyCharacter&, UOnyxPatrolComponent& Patrol)
+			[](AOnyxCharacter&, UOnyxPatrolComponent& Patrol)
 			{
 				Patrol.Style = EOnyxPatrolStyle::Hop;
 				Patrol.HopInterval = 2.f;
@@ -294,7 +345,7 @@ namespace
 		// --- Tiles ---------------------------------------------------------------------------------
 		Progress.EnterProgressFrame(1.f, INVTEXT("Tile set"));
 		UTexture2D* TileSheet = ImportPng(Png / TEXT("environment/layers/tileset.png"), TEXT("Textures"), TEXT("T_SunnyLand_Tiles"));
-		UPaperTileSet* TileSet = UOnyxEditorLibrary::CreateTileSet(TileSheet, FIntPoint(Tile, Tile), TEXT("TS_SunnyLand"), Root, false);
+		UPaperTileSet* TileSet = UOnyxEditorLibrary::CreateTileSet(TileSheet, FIntPoint(TilePixels, TilePixels), TEXT("TS_SunnyLand"), Root, false);
 		if (!TileSet)
 		{
 			return Fail(INVTEXT("Could not create the tile set."));
@@ -348,7 +399,7 @@ namespace
 			}
 		}
 
-		UOnyxLightingProfile* CaveMood = FOnyxAssetFactory::CreateOrReuse<UOnyxLightingProfile>(Root, TEXT("LP_SunnyLandCave"));
+		UOnyxLightingProfile* CaveMood = FOnyxAssetUtils::CreateOrReuse<UOnyxLightingProfile>(Root, TEXT("LP_SunnyLandCave"));
 		CaveMood->Modify();
 		CaveMood->Preset = EOnyxMoodPreset::Cave;
 		CaveMood->Mood = FOnyxLightingMood::FromPreset(EOnyxMoodPreset::Cave);
@@ -356,7 +407,7 @@ namespace
 		Dirty.Add(CaveMood->GetPackage());
 
 		// Game mode that spawns the fox in this level only.
-		UBlueprint* GameMode = FOnyxAssetFactory::CreateBlueprint(Root, TEXT("BP_SunnyLandGameMode"), AOnyxGameMode::StaticClass());
+		UBlueprint* GameMode = FOnyxAssetUtils::CreateBlueprint(Root, TEXT("BP_SunnyLandGameMode"), AOnyxGameMode::StaticClass());
 		if (!GameMode)
 		{
 			return Fail(INVTEXT("Could not create the Sunny Land game mode."));
@@ -364,7 +415,7 @@ namespace
 		CastChecked<AOnyxGameMode>(GameMode->GeneratedClass->GetDefaultObject())->DefaultPawnClass = Fox->GeneratedClass;
 		GameMode->MarkPackageDirty();
 		Dirty.Add(GameMode->GetPackage());
-		FOnyxAssetFactory::SavePackages(Dirty);
+		FOnyxAssetUtils::SavePackages(Dirty);
 
 		// --- Level: rebuilt from scratch in a blank map, then saved over the old one -------------------
 		Progress.EnterProgressFrame(1.f, INVTEXT("Level"));
@@ -471,6 +522,30 @@ namespace
 		Cave->bConfine = false;
 		Cave->Lighting = CaveMood;
 		Cave->Priority = 1;
+
+		// Music: the pack's looping track (CC0), played by the level's Onyx Level Audio.
+		const FString MusicFile = Pack / TEXT("Sound/platformer_level03_loop.ogg");
+		if (FPaths::FileExists(MusicFile))
+		{
+			UAssetImportTask* Task = NewObject<UAssetImportTask>();
+			Task->Filename = MusicFile;
+			Task->DestinationPath = FString(Root) / TEXT("Audio");
+			Task->DestinationName = TEXT("SW_SunnyLand_Music");
+			Task->bAutomated = true;
+			Task->bReplaceExisting = true;
+			Task->bSave = false;
+			FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get().ImportAssetTasks({ Task });
+			if (USoundWave* Music = LoadObject<USoundWave>(nullptr, *(FString(Root) / TEXT("Audio/SW_SunnyLand_Music.SW_SunnyLand_Music"))))
+			{
+				Music->Modify();
+				Music->bLooping = true;
+				Music->MarkPackageDirty();
+				FOnyxAssetUtils::SavePackages({ Music->GetPackage() });
+				AOnyxLevelAudio* Audio = Spawn<AOnyxLevelAudio>(World, TileCenter(2.f, 2.f), TEXT("LevelAudio"));
+				Audio->Music = Music;
+				Audio->MusicVolume = 0.7f;
+			}
+		}
 
 		Progress.EnterProgressFrame(1.f, INVTEXT("Saving"));
 		if (!UEditorLoadingAndSavingUtils::SaveMap(World, FOnyxSunnyLandExample::LevelPath))

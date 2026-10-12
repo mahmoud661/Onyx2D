@@ -1,6 +1,10 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "Combat/OnyxHitboxComponent.h"
+#include "PaperFlipbook.h"
+#include "Sound/SoundBase.h"
+#include "Audio/OnyxAudioSubsystem.h"
+#include "World/OnyxFlipbookEffect.h"
 #include "Combat/OnyxCombatLibrary.h"
 #include "Feedback/OnyxFeedbackSubsystem.h"
 
@@ -100,6 +104,13 @@ void UOnyxHitboxComponent::TryHit(AActor* Victim)
 		return;
 	}
 
+	// Where the blow lands: between the hitbox and the victim.
+	const FVector Impact = (GetComponentLocation() + Victim->GetActorLocation()) * 0.5f;
+	UOnyxAudioSubsystem::PlaySoundAt(this, HitSound, Impact, EOnyxSoundCategory::Effects, 1.f, FMath::FRandRange(0.95f, 1.05f));
+	if (HitEffect)
+	{
+		AOnyxFlipbookEffect::Spawn(this, HitEffect, Impact);
+	}
 	if (UOnyxFeedbackSubsystem* Feedback = UOnyxFeedbackSubsystem::Get(this))
 	{
 		Feedback->HitStop(HitStopDuration);

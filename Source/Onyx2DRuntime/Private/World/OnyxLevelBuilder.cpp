@@ -2,7 +2,10 @@
 
 #include "World/OnyxLevelBuilder.h"
 #include "Camera/OnyxCameraBounds.h"
-#include "Character/OnyxEnemyCharacter.h"
+#include "Character/OnyxBehaviourLibrary.h"
+#include "Character/OnyxCharacter.h"
+#include "Combat/OnyxCombatTypes.h"
+#include "Movement/OnyxMovementComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -53,7 +56,7 @@ AOnyxLevelBuilder::AOnyxLevelBuilder()
 {
 	PrimaryActorTick.bCanEverTick = false;
 	Layout = DemoLayout;
-	EnemyClass = AOnyxEnemyCharacter::StaticClass();
+	EnemyClass = AOnyxCharacter::StaticClass();
 	LightClass = AOnyxLight2D::StaticClass();
 
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
@@ -144,7 +147,7 @@ void AOnyxLevelBuilder::RebuildStatic()
 UClass* AOnyxLevelBuilder::ResolveEnemyClass() const
 {
 	// An explicit choice on this actor wins; otherwise use the project-wide default enemy.
-	if (EnemyClass && EnemyClass != AOnyxEnemyCharacter::StaticClass())
+	if (EnemyClass && EnemyClass != AOnyxCharacter::StaticClass())
 	{
 		return EnemyClass;
 	}
@@ -204,7 +207,17 @@ void AOnyxLevelBuilder::SpawnDynamic()
 			case EnemyTile:
 				if (UClass* Enemy = ResolveEnemyClass())
 				{
-					World->SpawnActor<AActor>(Enemy, Location + FVector(0.f, 0.f, TileSize * 0.2f), FRotator::ZeroRotator, Params);
+					AActor* Spawned = World->SpawnActor<AActor>(Enemy, Location + FVector(0.f, 0.f, TileSize * 0.2f), FRotator::ZeroRotator, Params);
+					// The plain stand-in becomes a patrolling foe.
+					if (AOnyxCharacter* Foe = Cast<AOnyxCharacter>(Spawned); Foe && Enemy == AOnyxCharacter::StaticClass())
+					{
+						Foe->TeamId = OnyxTeams::Enemy;
+						if (UOnyxMovementComponent* Movement = Foe->GetOnyxMovement())
+						{
+							Movement->RunSpeed = 170.f;
+						}
+						UOnyxBehaviourLibrary::AddBehaviours(Foe, int32(UOnyxBehaviourLibrary::PatrolFoePreset));
+					}
 				}
 				break;
 			case LightTile:

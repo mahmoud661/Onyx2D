@@ -47,6 +47,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Lighting")
 	void ClearOverride(float BlendTime = 1.f);
 
+	/**
+	 * Lights up the whole scene for a moment, then fades back (lightning, an explosion, a camera flash). Intensity is
+	 * added to the ambient light; Duration is the fade back.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Lighting")
+	void Flash(FLinearColor Color = FLinearColor(0.85f, 0.9f, 1.f), float Intensity = 1.5f, float Duration = 0.35f);
+
+	/** The lighting subsystem of an object's world. */
+	static UOnyxLightingSubsystem* Get(const UObject* WorldContext);
+
 	/** The mood on screen right now (mid-blend values included). */
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Lighting")
 	FOnyxLightingMood GetCurrentMood() const { return Current; }
@@ -95,6 +105,10 @@ private:
 
 	FOnyxLightingMood Current;
 	FOnyxLightingMood BlendFrom;
+	FLinearColor FlashColor = FLinearColor::White;
+	float FlashIntensity = 0.f;
+	float FlashDuration = 0.f;
+	float FlashElapsed = 0.f;
 	TWeakObjectPtr<const UObject> ActiveSource;
 	float BlendElapsed = 0.f;
 	float BlendDuration = 0.f;

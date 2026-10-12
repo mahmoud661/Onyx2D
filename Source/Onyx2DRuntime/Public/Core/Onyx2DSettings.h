@@ -56,11 +56,11 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Rendering")
 	TSoftObjectPtr<UMaterialInterface> LightHaloMaterial;
 
-	/** Pawn the Onyx game mode spawns for players (e.g. a character made with the Character Wizard). Empty = Onyx Player Character. */
+	/** Character the Onyx game mode spawns for the player (one with Player Control). Empty = a grey stand-in you can already play. */
 	UPROPERTY(Config, EditAnywhere, Category = "Gameplay", meta = (MetaClass = "/Script/Onyx2DRuntime.OnyxCharacter"))
 	FSoftClassPath DefaultPlayerClass;
 
-	/** Enemy spawned by the level builder's 'E' tiles. Empty = Onyx Enemy Character. */
+	/** Character the level builder's 'E' tiles spawn. Empty = a grey patrolling stand-in. */
 	UPROPERTY(Config, EditAnywhere, Category = "Gameplay", meta = (MetaClass = "/Script/Onyx2DRuntime.OnyxCharacter"))
 	FSoftClassPath DefaultEnemyClass;
 

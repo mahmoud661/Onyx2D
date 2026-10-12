@@ -1,6 +1,7 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "OnyxScreen.h"
+#include "Audio/OnyxAudioSubsystem.h"
 #include "Components/Border.h"
 #include "Components/ButtonSlot.h"
 #include "Components/HorizontalBox.h"
@@ -544,7 +545,7 @@ void UOnyxScreen::PlayUISound(bool bConfirm) const
 	USoundBase* Sound = (bConfirm ? Style.ConfirmSound : Style.NavigateSound).LoadSynchronous();
 	if (Sound && GetWorld())
 	{
-		UGameplayStatics::PlaySound2D(this, Sound, Style.SoundVolume, 1.f, 0.f, nullptr, nullptr, true);
+		UGameplayStatics::PlaySound2D(this, Sound, Style.SoundVolume * UOnyxAudioSubsystem::GetCategoryVolume(EOnyxSoundCategory::UI), 1.f, 0.f, nullptr, nullptr, true);
 	}
 }
 

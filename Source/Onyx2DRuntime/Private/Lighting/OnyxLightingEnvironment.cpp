@@ -28,7 +28,17 @@ namespace
 
 AOnyxLightingEnvironment::AOnyxLightingEnvironment()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true; // only the day/night cycle ticks
+	PrimaryActorTick.bStartWithTickEnabled = false;
+	// Night, dawn, day, dusk, night.
+	const TPair<float, EOnyxMoodPreset> DefaultKeys[] = { { 0.f, EOnyxMoodPreset::Night }, { 0.25f, EOnyxMoodPreset::Dusk }, { 0.4f, EOnyxMoodPreset::Day },
+		{ 0.65f, EOnyxMoodPreset::Day }, { 0.78f, EOnyxMoodPreset::Dusk }, { 0.9f, EOnyxMoodPreset::Night } };
+	for (const TPair<float, EOnyxMoodPreset>& Default : DefaultKeys)
+	{
+		FOnyxTimeOfDayKey& Key = TimeOfDayKeys.AddDefaulted_GetRef();
+		Key.Time = Default.Key;
+		Key.Preset = Default.Value;
+	}
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
 	PostProcess = CreateDefaultSubobject<UPostProcessComponent>(TEXT("PostProcess"));
@@ -50,7 +60,59 @@ AOnyxLightingEnvironment::AOnyxLightingEnvironment()
 
 FOnyxLightingMood AOnyxLightingEnvironment::GetBaseMood() const
 {
+	if (bDayNightCycle && !TimeOfDayKeys.IsEmpty())
+	{
+		return GetCycleMood();
+	}
 	return Profile ? Profile->Mood : Mood;
+}
+
+FOnyxLightingMood AOnyxLightingEnvironment::GetCycleMood() const
+{
+	auto KeyMood = [](const FOnyxTimeOfDayKey& Key) { return Key.Profile ? Key.Profile->Mood : FOnyxLightingMood::FromPreset(Key.Preset); };
+	TArray<FOnyxTimeOfDayKey> Keys = TimeOfDayKeys;
+	Keys.Sort([](const FOnyxTimeOfDayKey& A, const FOnyxTimeOfDayKey& B) { return A.Time < B.Time; });
+
+	// The keys around the time, wrapping past midnight.
+	const float Now = FMath::Frac(TimeOfDay);
+	int32 Next = Keys.IndexOfByPredicate([Now](const FOnyxTimeOfDayKey& Key) { return Key.Time > Now; });
+	if (Next == INDEX_NONE)
+	{
+		Next = 0;
+	}
+	const int32 Previous = (Next - 1 + Keys.Num()) % Keys.Num();
+	const float From = Keys[Previous].Time;
+	float To = Keys[Next].Time;
+	float At = Now;
+	if (To <= From)
+	{
+		To += 1.f;
+		At = At < From ? At + 1.f : At;
+	}
+	const float Alpha = To > From ? FMath::SmoothStep(0.f, 1.f, (At - From) / (To - From)) : 0.f;
+	return FOnyxLightingMood::Blend(KeyMood(Keys[Previous]), KeyMood(Keys[Next]), Alpha);
+}
+
+void AOnyxLightingEnvironment::BeginPlay()
+{
+	Super::BeginPlay();
+	bWasNight = IsNight();
+	SetActorTickEnabled(bDayNightCycle);
+}
+
+void AOnyxLightingEnvironment::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	if (!bDayNightCycle)
+	{
+		return;
+	}
+	TimeOfDay = FMath::Frac(TimeOfDay + DeltaSeconds / FMath::Max(DayLength, 5.f));
+	if (IsNight() != bWasNight)
+	{
+		bWasNight = IsNight();
+		OnDayPhaseChanged.Broadcast(bWasNight);
+	}
 }
 
 void AOnyxLightingEnvironment::EnsureComposite()

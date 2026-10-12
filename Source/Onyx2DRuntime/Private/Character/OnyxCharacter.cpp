@@ -1,7 +1,11 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "Character/OnyxCharacter.h"
-#include "Animation/OnyxAnimatorComponent.h"
+#include "Sound/SoundBase.h"
+#include "Audio/OnyxAudioSubsystem.h"
+#include "Character/OnyxRespawnComponent.h"
+#include "World/OnyxFlipbookEffect.h"
+#include "Animation/OnyxMovesetComponent.h"
 #include "Combat/OnyxCombatComponent.h"
 #include "Combat/OnyxHealthComponent.h"
 #include "Combat/OnyxHitboxComponent.h"
@@ -26,8 +30,9 @@ AOnyxCharacter::AOnyxCharacter(const FObjectInitializer& ObjectInitializer)
 	bUseControllerRotationYaw = false;
 	GetCapsuleComponent()->InitCapsuleSize(30.f, 60.f);
 
+	GetCharacterMovement()->bRunPhysicsWithNoController = true; // falls and lands even before anything possesses it
 	Health = CreateDefaultSubobject<UOnyxHealthComponent>(TEXT("Health"));
-	Animator = CreateDefaultSubobject<UOnyxAnimatorComponent>(TEXT("Animator"));
+	MovesetComponent = CreateDefaultSubobject<UOnyxMovesetComponent>(TEXT("Moveset"));
 	Combat = CreateDefaultSubobject<UOnyxCombatComponent>(TEXT("Combat"));
 
 	AttackHitbox = CreateDefaultSubobject<UOnyxHitboxComponent>(TEXT("AttackHitbox"));
@@ -112,7 +117,7 @@ void AOnyxCharacter::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
 	Combat->SetHitbox(AttackHitbox);
-	Animator->SetTargetFlipbook(GetSprite());
+	MovesetComponent->SetTargetFlipbook(GetSprite());
 }
 
 void AOnyxCharacter::BeginPlay()
@@ -127,13 +132,21 @@ void AOnyxCharacter::BeginPlay()
 	UpdatePlaceholder();
 	AlignSpriteToCapsule();
 	Health->OnDeath.AddUniqueDynamic(this, &AOnyxCharacter::HandleDeath);
+	if (UOnyxMovementComponent* Movement = GetOnyxMovement())
+	{
+		Movement->OnJumped.AddUniqueDynamic(this, &AOnyxCharacter::HandleJumpSound);
+		Movement->OnAirJumped.AddUniqueDynamic(this, &AOnyxCharacter::HandleJumpSound);
+		Movement->OnWallJumped.AddUniqueDynamic(this, &AOnyxCharacter::HandleJumpSound);
+		Movement->OnDashed.AddUniqueDynamic(this, &AOnyxCharacter::HandleDashSound);
+		Movement->OnLandedEvent.AddUniqueDynamic(this, &AOnyxCharacter::HandleLandSound);
+	}
 	ApplyFacing();
 }
 
 void AOnyxCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	// Animations can differ in frame size: keep the feet planted when the animator swaps flipbooks.
+	// Animations can differ in frame size: keep the feet planted when the moveset swaps flipbooks.
 	if (GetSprite() && GetSprite()->GetFlipbook() != AlignedFlipbook.Get())
 	{
 		AlignSpriteToCapsule();
@@ -196,6 +209,7 @@ void AOnyxCharacter::ApplyFacing()
 	}
 	AttackHitbox->SetRelativeLocation(FVector(Sign * AttackReach, 0.f, 0.f));
 	Combat->FacingSign = Sign;
+	MovesetComponent->SetFacingSign(Sign);
 }
 
 bool AOnyxCharacter::ReceiveDamage_Implementation(const FOnyxDamageInfo& Damage)
@@ -216,19 +230,62 @@ bool AOnyxCharacter::ReceiveDamage_Implementation(const FOnyxDamageInfo& Damage)
 	if (!Health->IsDead())
 	{
 		Combat->CancelAttack();
-		Animator->PlayOneShot(HurtAnimation);
+		MovesetComponent->PlayOneShot(HurtClip);
+		PlayCharacterSound(Sounds.Hurt);
 	}
 	OnHurt(Damage);
 	return true;
 }
 
+void AOnyxCharacter::HandleJumpSound()
+{
+	PlayCharacterSound(Sounds.Jump);
+}
+
+void AOnyxCharacter::HandleLandSound()
+{
+	PlayCharacterSound(Sounds.Land);
+}
+
+void AOnyxCharacter::HandleDashSound()
+{
+	PlayCharacterSound(Sounds.Dash);
+}
+
+void AOnyxCharacter::PlayCharacterSound(USoundBase* Sound) const
+{
+	if (Sound)
+	{
+		UOnyxAudioSubsystem::PlaySoundAt(this, Sound, GetActorLocation(), EOnyxSoundCategory::Effects, Sounds.Volume,
+			1.f + FMath::FRandRange(-Sounds.PitchVariation, Sounds.PitchVariation));
+	}
+}
+
 void AOnyxCharacter::HandleDeath(AActor* Killer)
 {
 	Combat->CancelAttack();
-	Animator->PlayOneShot(DeathAnimation);
+	MovesetComponent->PlayOneShot(DeathClip);
+	PlayCharacterSound(Sounds.Death);
 	if (UOnyxMovementComponent* Movement = GetOnyxMovement())
 	{
 		Movement->SetMovementLocked(true);
 	}
 	OnDied(Killer);
+
+	// Characters that come back keep their body; the others leave (with their death effect).
+	if (FindComponentByClass<UOnyxRespawnComponent>())
+	{
+		return;
+	}
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	if (DeathEffect)
+	{
+		AOnyxFlipbookEffect::Spawn(this, DeathEffect, GetActorLocation(), GetSprite()->GetComponentScale().X);
+		GetSprite()->SetVisibility(false);
+		SetLifeSpan(0.1f);
+	}
+	else if (CorpseLifetime > 0.f)
+	{
+		SetLifeSpan(CorpseLifetime);
+	}
 }

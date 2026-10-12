@@ -1,8 +1,11 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "World/OnyxLevelExit.h"
+#include "Sound/SoundBase.h"
+#include "Audio/OnyxAudioSubsystem.h"
 #include "Camera/PlayerCameraManager.h"
-#include "Character/OnyxPlayerCharacter.h"
+#include "Character/OnyxPlayerControlComponent.h"
+#include "GameFramework/Pawn.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Core/Onyx2DLibrary.h"
@@ -45,12 +48,17 @@ void AOnyxLevelExit::BeginPlay()
 
 void AOnyxLevelExit::HandleOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
 {
-	AOnyxPlayerCharacter* Player = Cast<AOnyxPlayerCharacter>(OtherActor);
-	if (!Player || bTriggered)
+	APawn* Player = Cast<APawn>(OtherActor);
+	if (!Player || !Player->IsPlayerControlled() || bTriggered)
 	{
 		return;
 	}
 	bTriggered = true;
+	UOnyxAudioSubsystem::PlaySound2D(this, EnterSound);
+	if (UOnyxPlayerControlComponent* Control = Player->FindComponentByClass<UOnyxPlayerControlComponent>())
+	{
+		Control->SetControlEnabled(false);
+	}
 	if (APlayerController* PC = Cast<APlayerController>(Player->GetController()))
 	{
 		Player->DisableInput(PC);

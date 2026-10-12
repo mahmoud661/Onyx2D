@@ -27,7 +27,8 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Editor")
 	static UBlueprint* CreateCharacterFromSheet(UTexture2D* SpriteSheet, const FString& Name, const FString& Folder, FIntPoint FrameSize,
-		const TArray<FName>& RowAnimations, bool bPlayer = true, float CentimetersPerPixel = 4.f, float FramesPerSecond = 10.f);
+		const TArray<FName>& RowAnimations, UPARAM(meta = (Bitmask, BitmaskEnum = "/Script/Onyx2DRuntime.EOnyxBehaviour")) int32 Behaviours = 7,
+		uint8 Team = 1, float CentimetersPerPixel = 4.f, float FramesPerSecond = 10.f);
 
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Editor")
 	static UPaperTileSet* CreateTileSet(UTexture2D* Texture, FIntPoint TileSize, const FString& Name, const FString& Folder, bool bSolidCollision = true);
@@ -71,7 +72,8 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Editor")
 	static UBlueprint* CreateCharacterFromStrips(const TMap<FName, UTexture2D*>& Strips, const FString& Name, const FString& Folder, FIntPoint FrameSize,
-		bool bPlayer, float CentimetersPerPixel, const TMap<FName, float>& FramesPerSecond);
+		UPARAM(meta = (Bitmask, BitmaskEnum = "/Script/Onyx2DRuntime.EOnyxBehaviour")) int32 Behaviours, uint8 Team, float CentimetersPerPixel,
+		const TMap<FName, float>& FramesPerSecond);
 
 	/** Imports a Tiled JSON map (.json / .tmj) as a Paper2D tile map using TileSet, optionally placing it in the level. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Editor")
@@ -115,6 +117,10 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Editor")
 	static TArray<UObject*> ImportArt(const TArray<FString>& Paths, const FString& Folder = TEXT("/Game/Art"), float CentimetersPerPixel = 4.f);
+
+	/** Gives a character Blueprint behaviours (components) it doesn't have yet: Player Control, Camera, Patrol... */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Editor")
+	static void AddBehavioursToBlueprint(UBlueprint* Blueprint, UPARAM(meta = (Bitmask, BitmaskEnum = "/Script/Onyx2DRuntime.EOnyxBehaviour")) int32 Behaviours);
 
 	/** Adds game mode, player start, lights and tile collision to the open level when missing. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Editor")

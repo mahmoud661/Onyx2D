@@ -38,6 +38,18 @@ namespace OnyxTeams
 	constexpr uint8 Enemy = 2;
 }
 
+/** The standard teams, for pickers (a character's Team Id can be any number). */
+UENUM(BlueprintType)
+enum class EOnyxTeam : uint8
+{
+	/** Fights everyone. */
+	Neutral = 0,
+	/** The player's side. */
+	Player = 1,
+	/** Against the player. */
+	Enemy = 2
+};
+
 UINTERFACE(MinimalAPI, BlueprintType)
 class UOnyxDamageable : public UInterface
 {

@@ -793,6 +793,33 @@ void UOnyxSettingsMenu::BuildAudioOptions(TArray<FOnyxOption>& Out)
 	Volume.Read = [Settings]() { return FMath::Clamp(FMath::RoundToInt(Settings->GetMasterVolume() * 20.f), 0, 20); };
 	Volume.Apply = [Settings](int32 Index) { Settings->SetMasterVolume(Index * 0.05f); Settings->ApplyCustomSettings(); };
 
+	// Music / effects / UI on top of Master.
+	struct FCategory
+	{
+		FText Label;
+		FText Description;
+		float (UOnyxGameUserSettings::*Getter)() const;
+		void (UOnyxGameUserSettings::*Setter)(float);
+	};
+	const FCategory Categories[] = {
+		{ INVTEXT("Music"), INVTEXT("Level and zone music."), &UOnyxGameUserSettings::GetMusicVolume, &UOnyxGameUserSettings::SetMusicVolume },
+		{ INVTEXT("Sound Effects"), INVTEXT("Footsteps, hits, pickups and ambience."), &UOnyxGameUserSettings::GetEffectsVolume, &UOnyxGameUserSettings::SetEffectsVolume },
+		{ INVTEXT("Interface"), INVTEXT("Menu and HUD sounds."), &UOnyxGameUserSettings::GetUIVolume, &UOnyxGameUserSettings::SetUIVolume },
+	};
+	for (const FCategory& Category : Categories)
+	{
+		FOnyxOption& Option = Out.AddDefaulted_GetRef();
+		Option.Label = Category.Label;
+		Option.Description = Category.Description;
+		Option.Choices = PercentChoices(0, 100, 5);
+		Option.bWrap = false;
+		Option.bMeter = true;
+		auto Getter = Category.Getter;
+		auto Setter = Category.Setter;
+		Option.Read = [Settings, Getter]() { return FMath::Clamp(FMath::RoundToInt((Settings->*Getter)() * 20.f), 0, 20); };
+		Option.Apply = [Settings, Setter](int32 Index) { (Settings->*Setter)(Index * 0.05f); Settings->ApplyCustomSettings(); };
+	}
+
 	FOnyxOption& Mute = Out.AddDefaulted_GetRef();
 	Mute.Label = INVTEXT("Mute When Unfocused");
 	Mute.Description = INVTEXT("Silences the game while another window is in front.");

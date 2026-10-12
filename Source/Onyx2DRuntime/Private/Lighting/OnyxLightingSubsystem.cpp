@@ -83,6 +83,20 @@ void UOnyxLightingSubsystem::PushOverride(UOnyxLightingProfile* Profile, float B
 	OverrideBlend = BlendTime;
 }
 
+UOnyxLightingSubsystem* UOnyxLightingSubsystem::Get(const UObject* WorldContext)
+{
+	const UWorld* World = WorldContext ? WorldContext->GetWorld() : nullptr;
+	return World ? World->GetSubsystem<UOnyxLightingSubsystem>() : nullptr;
+}
+
+void UOnyxLightingSubsystem::Flash(FLinearColor Color, float Intensity, float Duration)
+{
+	FlashColor = Color;
+	FlashIntensity = FMath::Max(Intensity, 0.f);
+	FlashDuration = FMath::Max(Duration, 0.01f);
+	FlashElapsed = 0.f;
+}
+
 void UOnyxLightingSubsystem::ClearOverride(float BlendTime)
 {
 	Override = nullptr;
@@ -201,10 +215,20 @@ void UOnyxLightingSubsystem::Tick(float DeltaTime)
 		return;
 	}
 	UpdateMood(DeltaTime, ViewTarget);
-	Target->ApplyMood(Current);
+	FOnyxLightingMood Shown = Current;
+	if (FlashElapsed < FlashDuration && FlashIntensity > 0.f)
+	{
+		// Bright at once, then eases back.
+		FlashElapsed += DeltaTime;
+		const float Alpha = FMath::Square(1.f - FMath::Clamp(FlashElapsed / FlashDuration, 0.f, 1.f));
+		Shown.AmbientColor = FMath::Lerp(Shown.AmbientColor, FlashColor, Alpha * 0.8f);
+		Shown.AmbientIntensity += FlashIntensity * Alpha;
+		Shown.BackgroundTint = FMath::Lerp(Shown.BackgroundTint, FlashColor * (1.f + FlashIntensity), Alpha * 0.6f);
+	}
+	Target->ApplyMood(Shown);
 	if (UMaterialParameterCollection* Parameters = UOnyx2DSettings::Get()->LightingParameters.LoadSynchronous())
 	{
-		UKismetMaterialLibrary::SetVectorParameterValue(this, Parameters, TEXT("BackgroundTint"), Current.BackgroundTint);
+		UKismetMaterialLibrary::SetVectorParameterValue(this, Parameters, TEXT("BackgroundTint"), Shown.BackgroundTint);
 	}
 
 	EnsureTargets(View.ViewportSize);

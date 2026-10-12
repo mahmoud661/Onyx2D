@@ -1,18 +1,18 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "OnyxEditorLibrary.h"
-#include "Assets/OnyxArtImporter.h"
-#include "Assets/OnyxNormalMaps.h"
-#include "Assets/OnyxFramePacker.h"
-#include "Assets/OnyxTiledImporter.h"
-#include "Assets/OnyxTerrains.h"
-#include "Assets/OnyxTilePadding.h"
-#include "Assets/OnyxMapPainter.h"
+#include "Builders/OnyxArtImporter.h"
+#include "Builders/OnyxNormalMaps.h"
+#include "Builders/OnyxFramePacker.h"
+#include "Builders/OnyxTiledImporter.h"
+#include "Builders/OnyxTerrains.h"
+#include "Builders/OnyxTilePadding.h"
+#include "Level/OnyxMapPainter.h"
 #include "PaperTileSet.h"
-#include "Assets/OnyxAssetFactory.h"
-#include "Assets/OnyxCharacterBuilder.h"
-#include "Assets/OnyxLevelTools.h"
-#include "Assets/OnyxTileBuilder.h"
+#include "Builders/OnyxAssetUtils.h"
+#include "Builders/OnyxCharacterBuilder.h"
+#include "Level/OnyxLevelTools.h"
+#include "Builders/OnyxTileBuilder.h"
 #include "Engine/Blueprint.h"
 #include "Engine/Texture2D.h"
 #include "PaperFlipbook.h"
@@ -23,7 +23,7 @@
 DEFINE_LOG_CATEGORY_STATIC(LogOnyxEditor, Log, All);
 
 UBlueprint* UOnyxEditorLibrary::CreateCharacterFromSheet(UTexture2D* SpriteSheet, const FString& Name, const FString& Folder, FIntPoint FrameSize,
-	const TArray<FName>& RowAnimations, bool bPlayer, float CentimetersPerPixel, float FramesPerSecond)
+	const TArray<FName>& RowAnimations, int32 Behaviours, uint8 Team, float CentimetersPerPixel, float FramesPerSecond)
 {
 	FOnyxCharacterSpec Spec;
 	Spec.Name = Name;
@@ -31,18 +31,19 @@ UBlueprint* UOnyxEditorLibrary::CreateCharacterFromSheet(UTexture2D* SpriteSheet
 	Spec.SpriteSheet = SpriteSheet;
 	Spec.FrameSize = FrameSize;
 	Spec.CentimetersPerPixel = CentimetersPerPixel;
-	Spec.Kind = bPlayer ? EOnyxCharacterKind::Player : EOnyxCharacterKind::Enemy;
+	Spec.Behaviours = Behaviours;
+	Spec.Team = Team;
 
-	const TArray<FOnyxAnimationSpec> Presets = FOnyxCharacterSpec::DefaultAnimations();
+	const TArray<FOnyxClipSpec> Presets = FOnyxCharacterSpec::DefaultClips();
 	for (int32 Row = 0; Row < RowAnimations.Num(); ++Row)
 	{
-		const FOnyxAnimationSpec* Preset = Presets.FindByPredicate([&](const FOnyxAnimationSpec& P) { return P.Name == RowAnimations[Row]; });
-		FOnyxAnimationSpec Animation = Preset ? *Preset : FOnyxAnimationSpec();
+		const FOnyxClipSpec* Preset = Presets.FindByPredicate([&](const FOnyxClipSpec& P) { return P.Name == RowAnimations[Row]; });
+		FOnyxClipSpec Animation = Preset ? *Preset : FOnyxClipSpec();
 		Animation.Name = RowAnimations[Row];
 		Animation.Row = Row;
 		Animation.bEnabled = true;
 		Animation.FramesPerSecond = Preset ? Preset->FramesPerSecond : FramesPerSecond;
-		Spec.Animations.Add(Animation);
+		Spec.Clips.Add(Animation);
 	}
 
 	const FOnyxCharacterBuildResult Result = FOnyxCharacterBuilder::Build(Spec);
@@ -105,17 +106,17 @@ TArray<FString> UOnyxEditorLibrary::SetupCurrentLevelFor2D()
 UPaperSprite* UOnyxEditorLibrary::CreateSpriteFromCell(UTexture2D* Texture, FIntPoint CellSize, FIntPoint Cell, const FString& Name, const FString& Folder,
 	float CentimetersPerPixel)
 {
-	if (!Texture || CellSize.X <= 0 || CellSize.Y <= 0 || !FOnyxAssetFactory::IsValidContentFolder(Folder))
+	if (!Texture || CellSize.X <= 0 || CellSize.Y <= 0 || !FOnyxAssetUtils::IsValidContentFolder(Folder))
 	{
 		UE_LOG(LogOnyxEditor, Error, TEXT("CreateSpriteFromCell: needs a texture, a positive cell size and a /Game folder."));
 		return nullptr;
 	}
-	FOnyxAssetFactory::ConfigurePixelArtTexture(Texture);
-	UPaperSprite* Sprite = FOnyxAssetFactory::CreateSprite(Folder, FOnyxAssetFactory::SanitizeName(Name), Texture,
+	FOnyxAssetUtils::ConfigurePixelArtTexture(Texture);
+	UPaperSprite* Sprite = FOnyxAssetUtils::CreateSprite(Folder, FOnyxAssetUtils::SanitizeName(Name), Texture,
 		FIntPoint(Cell.X * CellSize.X, Cell.Y * CellSize.Y), CellSize, 1.f / FMath::Max(CentimetersPerPixel, 0.01f), ESpritePivotMode::Bottom_Center);
 	if (Sprite)
 	{
-		FOnyxAssetFactory::SavePackages({ Sprite->GetPackage() });
+		FOnyxAssetUtils::SavePackages({ Sprite->GetPackage() });
 	}
 	return Sprite;
 }
@@ -123,7 +124,7 @@ UPaperSprite* UOnyxEditorLibrary::CreateSpriteFromCell(UTexture2D* Texture, FInt
 UPaperFlipbook* UOnyxEditorLibrary::CreateFlipbookFromCells(UTexture2D* Texture, FIntPoint CellSize, const TArray<FIntPoint>& Cells, const FString& Name,
 	const FString& Folder, float CentimetersPerPixel, float FramesPerSecond)
 {
-	const FString SafeName = FOnyxAssetFactory::SanitizeName(Name);
+	const FString SafeName = FOnyxAssetUtils::SanitizeName(Name);
 	TArray<UPaperSprite*> Frames;
 	TArray<UPackage*> Packages;
 	for (int32 Index = 0; Index < Cells.Num(); ++Index)
@@ -137,10 +138,10 @@ UPaperFlipbook* UOnyxEditorLibrary::CreateFlipbookFromCells(UTexture2D* Texture,
 	{
 		return nullptr;
 	}
-	UPaperFlipbook* Flipbook = FOnyxAssetFactory::CreateFlipbook(Folder, SafeName, Frames, FramesPerSecond);
+	UPaperFlipbook* Flipbook = FOnyxAssetUtils::CreateFlipbook(Folder, SafeName, Frames, FramesPerSecond);
 	if (Flipbook)
 	{
-		FOnyxAssetFactory::SavePackages({ Flipbook->GetPackage() });
+		FOnyxAssetUtils::SavePackages({ Flipbook->GetPackage() });
 	}
 	return Flipbook;
 }
@@ -150,7 +151,7 @@ int32 UOnyxEditorLibrary::AutoAssignTileCollision(UPaperTileSet* TileSet, float 
 	const int32 Solid = FOnyxTileBuilder::AutoAssignCollision(TileSet, SolidCoverage);
 	if (TileSet)
 	{
-		FOnyxAssetFactory::SavePackages({ TileSet->GetPackage() });
+		FOnyxAssetUtils::SavePackages({ TileSet->GetPackage() });
 	}
 	return Solid;
 }
@@ -178,35 +179,10 @@ UTexture2D* UOnyxEditorLibrary::PackFramesIntoStrip(const TArray<UTexture2D*>& F
 }
 
 UBlueprint* UOnyxEditorLibrary::CreateCharacterFromStrips(const TMap<FName, UTexture2D*>& Strips, const FString& Name, const FString& Folder, FIntPoint FrameSize,
-	bool bPlayer, float CentimetersPerPixel, const TMap<FName, float>& FramesPerSecond)
+	int32 Behaviours, uint8 Team, float CentimetersPerPixel, const TMap<FName, float>& FramesPerSecond)
 {
-	FOnyxCharacterSpec Spec;
-	Spec.Name = Name;
-	Spec.Folder = Folder;
-	Spec.FrameSize = FrameSize;
-	Spec.CentimetersPerPixel = CentimetersPerPixel;
-	Spec.Kind = bPlayer ? EOnyxCharacterKind::Player : EOnyxCharacterKind::Enemy;
-	Spec.bAutoFitCapsule = true;
-
-	const TArray<FOnyxAnimationSpec> Presets = FOnyxCharacterSpec::DefaultAnimations();
-	for (const TPair<FName, UTexture2D*>& Strip : Strips)
-	{
-		const FOnyxAnimationSpec* Preset = Presets.FindByPredicate([&](const FOnyxAnimationSpec& P) { return P.Name == Strip.Key; });
-		FOnyxAnimationSpec Animation = Preset ? *Preset : FOnyxAnimationSpec();
-		Animation.Name = Strip.Key;
-		Animation.bEnabled = true;
-		Animation.TextureOverride = Strip.Value;
-		Animation.Row = 0;
-		Animation.StartColumn = 0;
-		Animation.FrameCount = 0;
-		if (const float* Speed = FramesPerSecond.Find(Strip.Key))
-		{
-			Animation.FramesPerSecond = *Speed;
-		}
-		Spec.Animations.Add(Animation);
-	}
-
-	const FOnyxCharacterBuildResult Result = FOnyxCharacterBuilder::Build(Spec);
+	const FOnyxCharacterBuildResult Result = FOnyxCharacterBuilder::Build(
+		FOnyxCharacterSpec::FromStrips(Strips, Name, Folder, FrameSize, Behaviours, Team, CentimetersPerPixel, FramesPerSecond));
 	for (const FString& Warning : Result.Warnings)
 	{
 		UE_LOG(LogOnyxEditor, Warning, TEXT("%s"), *Warning);
@@ -251,7 +227,7 @@ void UOnyxEditorLibrary::SetTileCollision(UPaperTileSet* TileSet, const TArray<i
 	}
 	TileSet->PostEditChange();
 	TileSet->MarkPackageDirty();
-	FOnyxAssetFactory::SavePackages({ TileSet->GetPackage() });
+	FOnyxAssetUtils::SavePackages({ TileSet->GetPackage() });
 }
 
 int32 UOnyxEditorLibrary::CreateTerrain(UPaperTileSet* TileSet, FIntPoint TemplateMin, FIntPoint TemplateSize, const FString& Name)
@@ -259,7 +235,7 @@ int32 UOnyxEditorLibrary::CreateTerrain(UPaperTileSet* TileSet, FIntPoint Templa
 	const int32 Terrain = FOnyxTerrains::CreateFromBlock(TileSet, TemplateMin, TemplateSize, Name);
 	if (Terrain != INDEX_NONE)
 	{
-		FOnyxAssetFactory::SavePackages({ TileSet->GetPackage() });
+		FOnyxAssetUtils::SavePackages({ TileSet->GetPackage() });
 	}
 	return Terrain;
 }
@@ -269,7 +245,7 @@ bool UOnyxEditorLibrary::SetTerrainInnerCorners(UPaperTileSet* TileSet, int32 Te
 	const bool bSet = FOnyxTerrains::SetInnerCorners(TileSet, Terrain, BlockMin, BlockSize);
 	if (bSet)
 	{
-		FOnyxAssetFactory::SavePackages({ TileSet->GetPackage() });
+		FOnyxAssetUtils::SavePackages({ TileSet->GetPackage() });
 	}
 	return bSet;
 }
@@ -289,7 +265,7 @@ void UOnyxEditorLibrary::PaintTerrain(UPaperTileMap* TileMap, int32 LayerIndex, 
 		Painter.PaintTerrain(Cell, TileSet, Terrain, bErase);
 	}
 	Painter.EndStroke();
-	FOnyxAssetFactory::SavePackages({ TileMap->GetPackage() });
+	FOnyxAssetUtils::SavePackages({ TileMap->GetPackage() });
 }
 
 TArray<FString> UOnyxEditorLibrary::GetTerrainNames(const UPaperTileSet* TileSet)
@@ -327,4 +303,14 @@ TArray<UObject*> UOnyxEditorLibrary::ImportArt(const TArray<FString>& Paths, con
 		}
 	}
 	return Results;
+}
+
+void UOnyxEditorLibrary::AddBehavioursToBlueprint(UBlueprint* Blueprint, int32 Behaviours)
+{
+	if (Blueprint)
+	{
+		FOnyxAssetUtils::AddBehaviourComponents(Blueprint, Behaviours);
+		Blueprint->MarkPackageDirty();
+		FOnyxAssetUtils::SavePackages({ Blueprint->GetPackage() });
+	}
 }

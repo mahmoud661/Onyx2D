@@ -1,7 +1,10 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "World/OnyxCheckpoint.h"
-#include "Character/OnyxPlayerCharacter.h"
+#include "Sound/SoundBase.h"
+#include "Audio/OnyxAudioSubsystem.h"
+#include "Character/OnyxRespawnComponent.h"
+#include "GameFramework/Pawn.h"
 #include "Combat/OnyxHealthComponent.h"
 #include "Components/BoxComponent.h"
 #include "Lighting/OnyxLight2DComponent.h"
@@ -52,21 +55,25 @@ void AOnyxCheckpoint::BeginPlay()
 
 void AOnyxCheckpoint::HandleOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
 {
-	AOnyxPlayerCharacter* Player = Cast<AOnyxPlayerCharacter>(OtherActor);
-	if (!Player || bActivated)
+	APawn* Player = Cast<APawn>(OtherActor);
+	if (!Player || !Player->IsPlayerControlled() || bActivated)
 	{
 		return;
 	}
 	bActivated = true;
-	Player->SetRespawnLocation(GetActorLocation() + FVector(0.f, 0.f, 20.f));
-	if (bHealOnActivate)
+	if (UOnyxRespawnComponent* Respawn = Player->FindComponentByClass<UOnyxRespawnComponent>())
 	{
-		Player->Health->Heal(Player->Health->MaxHealth);
+		Respawn->SetRespawnLocation(GetActorLocation() + FVector(0.f, 0.f, 20.f));
+	}
+	if (UOnyxHealthComponent* Health = Player->FindComponentByClass<UOnyxHealthComponent>(); Health && bHealOnActivate)
+	{
+		Health->Heal(Health->MaxHealth);
 	}
 	if (UOnyxFeedbackSubsystem* Feedback = UOnyxFeedbackSubsystem::Get(this))
 	{
 		Feedback->AddTrauma(0.15f);
 	}
+	UOnyxAudioSubsystem::PlaySoundAt(this, ActivateSound, GetActorLocation());
 	ApplyLook();
 	OnActivated.Broadcast(Player);
 }

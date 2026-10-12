@@ -7,6 +7,7 @@
 #include "OnyxCheckpoint.generated.h"
 
 class UBoxComponent;
+class USoundBase;
 class UOnyxLight2DComponent;
 class UStaticMeshComponent;
 
@@ -41,6 +42,10 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Onyx2D")
 	bool IsActivated() const { return bActivated; }
+
+	/** Played when the player reaches it. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D")
+	TObjectPtr<USoundBase> ActivateSound;
 
 	UPROPERTY(BlueprintAssignable, Category = "Onyx2D")
 	FOnyxCheckpointSignature OnActivated;

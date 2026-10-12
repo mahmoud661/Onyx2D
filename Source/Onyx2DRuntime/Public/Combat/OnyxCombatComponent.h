@@ -6,7 +6,7 @@
 #include "Components/ActorComponent.h"
 #include "OnyxCombatComponent.generated.h"
 
-class UOnyxAnimatorComponent;
+class UOnyxMovesetComponent;
 class UOnyxHitboxComponent;
 class UOnyxMovementComponent;
 
@@ -16,13 +16,14 @@ struct ONYX2DRUNTIME_API FOnyxAttack
 {
 	GENERATED_BODY()
 
-	/** Animator animation to play (optional; Duration is used when missing). */
+	/** Moveset role to play (optional; Duration is used when missing). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack")
-	FName Animation;
+	FName Clip;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack", meta = (ClampMin = "0.05"))
 	float Duration = 0.32f;
 
+	/** When the hitbox opens and closes. Ignored when the clip has a Hitbox window (the timeline decides then). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack", meta = (ClampMin = "0"))
 	float HitWindowStart = 0.06f;
 
@@ -51,7 +52,7 @@ struct ONYX2DRUNTIME_API FOnyxAttack
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnyxAttackSignature, int32, ComboIndex);
 
 /**
- * Melee combos with input buffering. Talks to the hitbox, animator and movement components
+ * Melee combos with input buffering. Talks to the hitbox, moveset and movement components
  * on the same actor if they exist; each is optional.
  */
 UCLASS(ClassGroup = (Onyx2D), meta = (BlueprintSpawnableComponent))
@@ -109,7 +110,7 @@ private:
 	TObjectPtr<UOnyxHitboxComponent> Hitbox;
 
 	UPROPERTY(Transient)
-	TObjectPtr<UOnyxAnimatorComponent> Animator;
+	TObjectPtr<UOnyxMovesetComponent> MovesetComponent;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UOnyxMovementComponent> Movement;
@@ -119,4 +120,6 @@ private:
 	float CurrentDuration = 0.f;
 	float BufferRemaining = 0.f;
 	bool bHitWindowOpen = false;
+	/** The playing attack clip opens the hitbox itself (it has a Hitbox window). */
+	bool bClipOwnsHitWindow = false;
 };

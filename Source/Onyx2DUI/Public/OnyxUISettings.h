@@ -74,7 +74,7 @@ public:
 	FOnyxUITheme Theme;
 
 	UPROPERTY(Config, EditAnywhere, Category = "Game")
-	FText GameTitle = INVTEXT("PLANAR");
+	FText GameTitle = INVTEXT("ONYX");
 
 	UPROPERTY(Config, EditAnywhere, Category = "Game")
 	FText GameSubtitle = INVTEXT("A 2D ADVENTURE");

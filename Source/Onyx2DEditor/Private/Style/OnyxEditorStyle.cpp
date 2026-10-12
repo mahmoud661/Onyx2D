@@ -17,8 +17,13 @@ namespace
 	/** Onyx actor classes and the SVG used for their class icon / thumbnail. */
 	const TPair<const TCHAR*, const TCHAR*> ClassIcons[] = {
 		{ TEXT("OnyxCharacter"), TEXT("Character") },
-		{ TEXT("OnyxPlayerCharacter"), TEXT("Character") },
-		{ TEXT("OnyxEnemyCharacter"), TEXT("Enemy") },
+		{ TEXT("OnyxLevelAudio"), TEXT("Audio") },
+		{ TEXT("OnyxLightSwitch"), TEXT("Switch") },
+		{ TEXT("OnyxPlayerControlComponent"), TEXT("Character") },
+		{ TEXT("OnyxPatrolComponent"), TEXT("Enemy") },
+		{ TEXT("OnyxStompableComponent"), TEXT("Enemy") },
+		{ TEXT("OnyxContactDamageComponent"), TEXT("Hazard") },
+		{ TEXT("OnyxRespawnComponent"), TEXT("Checkpoint") },
 		{ TEXT("OnyxPickup"), TEXT("Pickup") },
 		{ TEXT("OnyxMovingPlatform"), TEXT("MovingPlatform") },
 		{ TEXT("OnyxLevelExit"), TEXT("LevelExit") },
@@ -35,7 +40,9 @@ namespace
 	/** Tool icons: style name suffix -> SVG. */
 	const TPair<const TCHAR*, const TCHAR*> ToolIcons[] = {
 		{ TEXT("Onyx2D.Icon"), TEXT("Onyx2D") },
+		{ TEXT("Onyx2D.Tab.Home"), TEXT("Home") },
 		{ TEXT("Onyx2D.Tab.Import"), TEXT("Import") },
+		{ TEXT("Onyx2D.Tab.Library"), TEXT("Library") },
 		{ TEXT("Onyx2D.Tab.Character"), TEXT("Character") },
 		{ TEXT("Onyx2D.Tab.Animations"), TEXT("Animation") },
 		{ TEXT("Onyx2D.Tab.Tiles"), TEXT("Tiles") },
@@ -61,6 +68,18 @@ namespace
 		{ TEXT("Onyx2D.EyeOff"), TEXT("EyeOff") },
 		{ TEXT("Onyx2D.Layer.Tiles"), TEXT("LayerTiles") },
 		{ TEXT("Onyx2D.Layer.Entities"), TEXT("LayerEntities") },
+		{ TEXT("Onyx2D.Timeline.Frames"), TEXT("Frames") },
+		{ TEXT("Onyx2D.Event.Message"), TEXT("EventMessage") },
+		{ TEXT("Onyx2D.Event.Sound"), TEXT("EventSound") },
+		{ TEXT("Onyx2D.Event.Effect"), TEXT("EventEffect") },
+		{ TEXT("Onyx2D.Event.Shake"), TEXT("EventShake") },
+		{ TEXT("Onyx2D.Event.Light"), TEXT("EventLight") },
+		{ TEXT("Onyx2D.Event.Flash"), TEXT("EventFlash") },
+		{ TEXT("Onyx2D.Event.Custom"), TEXT("EventCustom") },
+		{ TEXT("Onyx2D.Window.Hitbox"), TEXT("WindowHitbox") },
+		{ TEXT("Onyx2D.Window.Invulnerable"), TEXT("WindowInvulnerable") },
+		{ TEXT("Onyx2D.Window.LoopSound"), TEXT("WindowLoopSound") },
+		{ TEXT("Onyx2D.Window.Custom"), TEXT("WindowCustom") },
 	};
 }
 

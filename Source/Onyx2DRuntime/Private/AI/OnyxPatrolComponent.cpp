@@ -28,6 +28,10 @@ void UOnyxPatrolComponent::BeginPlay()
 	{
 		return;
 	}
+	if (!Character->GetController())
+	{
+		Character->SpawnDefaultController(); // spawned at runtime without auto-possess: still patrols
+	}
 	Home = Character->GetActorLocation();
 	HopTimer = HopInterval * FMath::FRandRange(0.3f, 1.f); // neighbours don't hop in sync
 	if (Style == EOnyxPatrolStyle::Fly)

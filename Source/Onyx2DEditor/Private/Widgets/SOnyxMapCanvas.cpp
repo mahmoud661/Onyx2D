@@ -1,14 +1,14 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "Widgets/SOnyxMapCanvas.h"
-#include "Assets/OnyxBrushLibrary.h"
-#include "Assets/OnyxMapPainter.h"
+#include "Level/OnyxBrushLibrary.h"
+#include "Level/OnyxMapPainter.h"
 #include "Engine/Texture2D.h"
 #include "PaperTileSet.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/AppStyle.h"
 #include "Styling/SlateIconFinder.h"
-#include "Widgets/OnyxToolWidgets.h"
+#include "ToolsWindow/OnyxToolWidgets.h"
 
 namespace
 {
@@ -16,7 +16,7 @@ namespace
 	constexpr float MaxZoom = 32.f;
 	const FLinearColor BackgroundColor(0.018f, 0.02f, 0.026f);
 	const FLinearColor MapColor(0.045f, 0.05f, 0.062f);
-	const FLinearColor GridColor(1.f, 1.f, 1.f, 0.055f);
+	const FLinearColor CanvasGridColor(1.f, 1.f, 1.f, 0.055f);
 
 	void DrawRect(FSlateWindowElementList& Out, int32 LayerId, const FGeometry& Geometry, const FVector2f& Min, const FVector2f& Size, const FLinearColor& Color)
 	{
@@ -240,13 +240,13 @@ int32 SOnyxMapCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 		{
 			Line[0] = FVector2f(MapMin.X + X * CellSize.X, MapMin.Y);
 			Line[1] = FVector2f(Line[0].X, MapMin.Y + MapPixels.Y);
-			FSlateDrawElement::MakeLines(OutDrawElements, DrawLayer, AllottedGeometry.ToPaintGeometry(), Line, ESlateDrawEffect::None, GridColor, false, 1.f);
+			FSlateDrawElement::MakeLines(OutDrawElements, DrawLayer, AllottedGeometry.ToPaintGeometry(), Line, ESlateDrawEffect::None, CanvasGridColor, false, 1.f);
 		}
 		for (int32 Y = First.Y; Y <= Last.Y + 1; ++Y)
 		{
 			Line[0] = FVector2f(MapMin.X, MapMin.Y + Y * CellSize.Y);
 			Line[1] = FVector2f(MapMin.X + MapPixels.X, Line[0].Y);
-			FSlateDrawElement::MakeLines(OutDrawElements, DrawLayer, AllottedGeometry.ToPaintGeometry(), Line, ESlateDrawEffect::None, GridColor, false, 1.f);
+			FSlateDrawElement::MakeLines(OutDrawElements, DrawLayer, AllottedGeometry.ToPaintGeometry(), Line, ESlateDrawEffect::None, CanvasGridColor, false, 1.f);
 		}
 	}
 	DrawOutline(OutDrawElements, DrawLayer, AllottedGeometry, MapMin, MapPixels, FLinearColor(1.f, 1.f, 1.f, 0.18f));

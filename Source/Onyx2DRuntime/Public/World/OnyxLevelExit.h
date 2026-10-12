@@ -7,6 +7,7 @@
 #include "OnyxLevelExit.generated.h"
 
 class UBoxComponent;
+class USoundBase;
 class UStaticMeshComponent;
 
 /** Door / goal: the player touching it fades out and opens the next level. */
@@ -27,6 +28,10 @@ public:
 	/** Level to open. Empty = restart the current level. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D")
 	TSoftObjectPtr<UWorld> NextLevel;
+
+	/** Played when the player steps in. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D")
+	TObjectPtr<USoundBase> EnterSound;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D", meta = (ClampMin = "0"))
 	float FadeTime = 0.8f;

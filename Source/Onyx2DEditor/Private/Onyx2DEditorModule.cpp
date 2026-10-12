@@ -1,9 +1,9 @@
 // Copyright Onyx2D. All Rights Reserved.
 
-#include "Assets/OnyxAssetFactory.h"
-#include "Assets/OnyxLevelTools.h"
-#include "Assets/OnyxLevelValidator.h"
-#include "Assets/OnyxPlaceables.h"
+#include "Builders/OnyxAssetUtils.h"
+#include "Level/OnyxLevelTools.h"
+#include "Level/OnyxLevelValidator.h"
+#include "Level/OnyxPlaceables.h"
 #include "AssetRegistry/AssetData.h"
 #include "ContentBrowserMenuContexts.h"
 #include "Core/Onyx2DSettings.h"
@@ -12,15 +12,22 @@
 #include "PaperTileMap.h"
 #include "PaperSprite.h"
 #include "PaperTileSet.h"
-#include "Assets/OnyxNormalMaps.h"
+#include "Builders/OnyxNormalMaps.h"
 #include "Lighting/OnyxEditorLightingView.h"
-#include "Assets/OnyxFramePacker.h"
-#include "Assets/OnyxMaterialBuilder.h"
+#include "Builders/OnyxFramePacker.h"
+#include "Builders/OnyxMaterialBuilder.h"
 #include "Examples/OnyxSunnyLandExample.h"
 #include "FileHelpers.h"
-#include "Assets/OnyxMapPainter.h"
-#include "Assets/OnyxTilePadding.h"
+#include "Level/OnyxMapPainter.h"
+#include "Builders/OnyxTilePadding.h"
 #include "Framework/Docking/TabManager.h"
+#include "Containers/Ticker.h"
+#include "Framework/Application/SlateApplication.h"
+#include "HAL/IConsoleManager.h"
+#include "HAL/PlatformFileManager.h"
+#include "ImageUtils.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "IPlacementModeModule.h"
 #include "LevelEditor.h"
 #include "MessageLogModule.h"
@@ -30,8 +37,9 @@
 #include "Subsystems/ImportSubsystem.h"
 #include "ToolMenus.h"
 #include "Widgets/Docking/SDockTab.h"
-#include "Widgets/OnyxToolWidgets.h"
-#include "Widgets/SOnyxToolkit.h"
+#include "ToolsWindow/OnyxToolWidgets.h"
+#include "ToolsWindow/SOnyxToolsWindow.h"
+#include "OnyxEditorTools.h"
 #include "WorkspaceMenuStructure.h"
 #include "WorkspaceMenuStructureModule.h"
 
@@ -68,6 +76,34 @@ public:
 
 		UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FOnyx2DEditorModule::RegisterMenus));
 		LightingView.Start();
+		OpenCommand = IConsoleManager::Get().RegisterConsoleCommand(TEXT("Onyx2D.Open"),
+			TEXT("Opens the Onyx2D tools, optionally on a tool: Home, Import, Library, Animations, Tiles, Painter, Parallax, Level. Animations <asset path> opens a Moveset, Clip or character."),
+			FConsoleCommandWithArgsDelegate::CreateLambda([this](const TArray<FString>& Args)
+			{
+				if (Args.IsEmpty())
+				{
+					OpenTools();
+				}
+				else if (Args.Num() > 1)
+				{
+					// Onyx2D.Open Animations /Game/Characters/Fox/MS_Fox
+					if (UObject* Asset = LoadObject<UObject>(nullptr, *Args[1]))
+					{
+						OnyxEditorTools::OpenMovesetEditor(Asset);
+					}
+				}
+				else
+				{
+					OpenToolTab(*(TEXT("Onyx2D.") + Args[0]));
+				}
+			}));
+
+		CaptureCommand = IConsoleManager::Get().RegisterConsoleCommand(TEXT("Onyx2D.CaptureTools"),
+			TEXT("Saves a PNG of every Onyx2D tool tab (for docs and reviews): Onyx2D.CaptureTools <folder>. Default: <Project>/Saved/Onyx2DScreens."),
+			FConsoleCommandWithArgsDelegate::CreateLambda([this](const TArray<FString>& Args)
+			{
+				CaptureTools(Args.IsEmpty() ? FPaths::ProjectSavedDir() / TEXT("Onyx2DScreens") : Args[0]);
+			}));
 
 		if (GEditor)
 		{
@@ -82,6 +118,16 @@ public:
 	virtual void ShutdownModule() override
 	{
 		LightingView.Stop();
+		if (CaptureCommand)
+		{
+			IConsoleManager::Get().UnregisterConsoleObject(CaptureCommand);
+			CaptureCommand = nullptr;
+		}
+		if (OpenCommand)
+		{
+			IConsoleManager::Get().UnregisterConsoleObject(OpenCommand);
+			OpenCommand = nullptr;
+		}
 		FCoreDelegates::GetOnPostEngineInit().Remove(PostEngineInitHandle);
 		if (GEditor)
 		{
@@ -107,6 +153,10 @@ public:
 		FOnyxEditorStyle::Unregister();
 	}
 
+
+	/** Brings the tools window up (used by asset editors and menus outside the window). */
+	TSharedPtr<SOnyxToolsWindow> OpenToolsForAsset() { return OpenTools(); }
+
 private:
 	// --- Tools panel -------------------------------------------------------------
 
@@ -114,7 +164,7 @@ private:
 	{
 		TSharedRef<SDockTab> Tab = SNew(SDockTab).TabRole(Role).Label(INVTEXT("Onyx2D"));
 		Tab->SetTabIcon(FOnyxEditorStyle::Get().GetBrush("Onyx2D.Icon.Small"));
-		TSharedRef<SOnyxToolkit> Toolkit = SNew(SOnyxToolkit, Tab);
+		TSharedRef<SOnyxToolsWindow> Toolkit = SNew(SOnyxToolsWindow, Tab);
 		Tab->SetContent(Toolkit);
 		ToolsTab = Tab;
 		ToolkitWidget = Toolkit;
@@ -127,7 +177,7 @@ private:
 	}
 
 	/** Brings the tools up in their own window (or wherever the user last docked them). */
-	TSharedPtr<SOnyxToolkit> OpenTools()
+	TSharedPtr<SOnyxToolsWindow> OpenTools()
 	{
 		if (TSharedPtr<SDockTab> Existing = ToolsTab.Pin())
 		{
@@ -139,9 +189,51 @@ private:
 		return ToolkitWidget.Pin();
 	}
 
+	/** Opens each tool in turn and saves the Onyx2D window as <Folder>/<Tool>.png (one tool every two seconds). */
+	void CaptureTools(const FString& Folder)
+	{
+		static const TCHAR* Tools[] = { TEXT("Home"), TEXT("Import"), TEXT("Library"), TEXT("Animations"), TEXT("Tiles"), TEXT("Painter"), TEXT("Parallax"), TEXT("Level") };
+		IFileManager::Get().MakeDirectory(*Folder, true);
+		TSharedRef<int32> Step = MakeShared<int32>(0);
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, Folder, Step](float) -> bool
+		{
+			const int32 Tool = *Step / 2;
+			if (Tool >= UE_ARRAY_COUNT(Tools))
+			{
+				UE_LOG(LogTemp, Display, TEXT("Onyx2D: tool screenshots saved in %s"), *Folder);
+				return false;
+			}
+			if (*Step % 2 == 0)
+			{
+				OpenToolTab(*(FString(TEXT("Onyx2D.")) + Tools[Tool]));
+			}
+			else if (TSharedPtr<SDockTab> Tab = ToolsTab.Pin())
+			{
+				// The window holding the Onyx2D tab, as it looks now.
+				if (TSharedPtr<SWindow> Window = FSlateApplication::Get().FindWidgetWindow(Tab.ToSharedRef()))
+				{
+					TArray<FColor> Pixels;
+					FIntVector Size;
+					if (FSlateApplication::Get().TakeScreenshot(Window.ToSharedRef(), Pixels, Size) && Size.X > 0)
+					{
+						for (FColor& Pixel : Pixels)
+						{
+							Pixel.A = 255;
+						}
+						TArray64<uint8> Png;
+						FImageUtils::PNGCompressImageArray(Size.X, Size.Y, Pixels, Png);
+						FFileHelper::SaveArrayToFile(Png, *(Folder / FString(Tools[Tool]) + TEXT(".png")));
+					}
+				}
+			}
+			++*Step;
+			return true;
+		}), 1.5f);
+	}
+
 	void OpenToolTab(FName TabId)
 	{
-		if (TSharedPtr<SOnyxToolkit> Toolkit = OpenTools())
+		if (TSharedPtr<SOnyxToolsWindow> Toolkit = OpenTools())
 		{
 			Toolkit->FocusTab(TabId);
 		}
@@ -234,7 +326,7 @@ private:
 			Section.AddMenuEntry("PaintOnyxLevel", INVTEXT("Paint in Level Painter"), INVTEXT("Open this tile map in the Onyx2D Level Painter."),
 				FOnyxEditorStyle::Icon("Onyx2D.Tab.Painter"), FUIAction(FExecuteAction::CreateLambda([this, Asset]()
 				{
-					if (TSharedPtr<SOnyxToolkit> Toolkit = OpenTools())
+					if (TSharedPtr<SOnyxToolsWindow> Toolkit = OpenTools())
 					{
 						Toolkit->ShowPainter(Cast<UPaperTileMap>(Asset.GetAsset()));
 					}
@@ -249,13 +341,14 @@ private:
 		{
 			Tools.AddMenuEntry(Name, Label, Tooltip, FOnyxEditorStyle::Icon(Icon), FUIAction(FExecuteAction::CreateLambda([this, TabId]() { OpenToolTab(TabId); })));
 		};
-		AddTool("Import", INVTEXT("Import Art"), INVTEXT("Drop PNGs or folders: tile sets and characters built for you"), "Onyx2D.Tab.Import", SOnyxToolkit::ImportTabId);
-		AddTool("Character", INVTEXT("Character Wizard"), INVTEXT("Sprite sheet to playable character"), "Onyx2D.Tab.Character", SOnyxToolkit::CharacterTabId);
-		AddTool("Animations", INVTEXT("Animations"), INVTEXT("Edit animations and frame events"), "Onyx2D.Tab.Animations", SOnyxToolkit::AnimationsTabId);
-		AddTool("Tiles", INVTEXT("Tiles"), INVTEXT("Tile sets and tile maps"), "Onyx2D.Tab.Tiles", SOnyxToolkit::TilesTabId);
-		AddTool("Painter", INVTEXT("Level Painter"), INVTEXT("Paint tiles and place entities, LDtk style"), "Onyx2D.Tab.Painter", SOnyxToolkit::PainterTabId);
-		AddTool("Parallax", INVTEXT("Parallax"), INVTEXT("Parallax background"), "Onyx2D.Tab.Parallax", SOnyxToolkit::ParallaxTabId);
-		AddTool("Level", INVTEXT("Level"), INVTEXT("Place actors and check the level"), "Onyx2D.Tab.Level", SOnyxToolkit::LevelTabId);
+		AddTool("Home", INVTEXT("Home"), INVTEXT("Where to start, and how to extend Onyx2D"), "Onyx2D.Tab.Home", SOnyxToolsWindow::HomeTabId);
+		AddTool("Import", INVTEXT("Import Art"), INVTEXT("Drop PNGs or folders: tile sets and characters built for you"), "Onyx2D.Tab.Import", SOnyxToolsWindow::ImportTabId);
+		AddTool("Library", INVTEXT("Library"), INVTEXT("Preview and place characters, enemies, tile sets and animations"), "Onyx2D.Tab.Library", SOnyxToolsWindow::LibraryTabId);
+		AddTool("Animations", INVTEXT("Movesets"), INVTEXT("Moveset Editor: clips, frames, timeline events, characters"), "Onyx2D.Tab.Animations", SOnyxToolsWindow::AnimationsTabId);
+		AddTool("Tiles", INVTEXT("Tiles"), INVTEXT("Tile sets and tile maps"), "Onyx2D.Tab.Tiles", SOnyxToolsWindow::TilesTabId);
+		AddTool("Painter", INVTEXT("Level Painter"), INVTEXT("Paint tiles and place entities, LDtk style"), "Onyx2D.Tab.Painter", SOnyxToolsWindow::PainterTabId);
+		AddTool("Parallax", INVTEXT("Parallax"), INVTEXT("Parallax background"), "Onyx2D.Tab.Parallax", SOnyxToolsWindow::ParallaxTabId);
+		AddTool("Level", INVTEXT("Level"), INVTEXT("Place actors and check the level"), "Onyx2D.Tab.Level", SOnyxToolsWindow::LevelTabId);
 
 		FToolMenuSection& Actions = Menu->AddSection("Actions", INVTEXT("Quick Actions"));
 		Actions.AddMenuEntry("SetupLevel", INVTEXT("Set Up Level for 2D"), INVTEXT("Add game mode, camera bounds, player start and lights where missing."),
@@ -271,7 +364,7 @@ private:
 				OnyxTools::Notify(INVTEXT("Project configured for 2D. Restart the editor for distance-field / shadow changes."), true);
 			})));
 		Actions.AddMenuEntry("CheckLevel", INVTEXT("Check Level"), INVTEXT("Open the Level tab and look for setup problems."),
-			FOnyxEditorStyle::Icon("Onyx2D.Validate"), FUIAction(FExecuteAction::CreateLambda([this]() { OpenToolTab(SOnyxToolkit::LevelTabId); })));
+			FOnyxEditorStyle::Icon("Onyx2D.Validate"), FUIAction(FExecuteAction::CreateLambda([this]() { OpenToolTab(SOnyxToolsWindow::LevelTabId); })));
 		Actions.AddMenuEntry("RebuildMaterials", INVTEXT("Rebuild Plugin Materials"),
 			INVTEXT("Re-creates the Onyx2D materials (lit sprite, 2D lighting composite, background, glow, halo) from C++."),
 			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Refresh"),
@@ -338,7 +431,7 @@ private:
 	static void AddPackStripEntry(FToolMenuSection& Section, const TArray<FAssetData>& Selected)
 	{
 		Section.AddMenuEntry("PackOnyxStrip", INVTEXT("Pack Into Animation Strip"),
-			INVTEXT("Puts the selected frame images side by side (in name order) in one texture, ready for the Character Wizard or a flipbook."),
+			INVTEXT("Puts the selected frame images side by side (in name order) in one texture, ready for the Moveset Editor or a flipbook."),
 			FOnyxEditorStyle::Icon("Onyx2D.Tab.Animations"),
 			FUIAction(FExecuteAction::CreateLambda([Selected]()
 			{
@@ -388,20 +481,20 @@ private:
 			return;
 		}
 		const FAssetData Asset = Context->SelectedAssets[0];
-		Section.AddMenuEntry("CreateOnyxCharacter", INVTEXT("Create Onyx Character..."),
-			INVTEXT("Open the Character Wizard with this sprite sheet."), FOnyxEditorStyle::Icon("Onyx2D.Tab.Character"),
+		Section.AddMenuEntry("CreateOnyxClip", INVTEXT("Make Clip from Sheet..."),
+			INVTEXT("Open the Moveset Editor and cut frames from this sprite sheet into a clip."), FOnyxEditorStyle::Icon("Onyx2D.Tab.Animations"),
 			FUIAction(FExecuteAction::CreateLambda([this, Asset]()
 			{
-				if (TSharedPtr<SOnyxToolkit> Toolkit = OpenTools())
+				if (TSharedPtr<SOnyxToolsWindow> Toolkit = OpenTools())
 				{
-					Toolkit->ShowCharacterWizard(Cast<UTexture2D>(Asset.GetAsset()));
+					Toolkit->ShowNewAnimation(Cast<UTexture2D>(Asset.GetAsset()));
 				}
 			})));
 		Section.AddMenuEntry("CreateOnyxTileSet", INVTEXT("Create Onyx Tile Set..."),
 			INVTEXT("Open the Tiles tool with this tile sheet."), FOnyxEditorStyle::Icon("Onyx2D.Tab.Tiles"),
 			FUIAction(FExecuteAction::CreateLambda([this, Asset]()
 			{
-				if (TSharedPtr<SOnyxToolkit> Toolkit = OpenTools())
+				if (TSharedPtr<SOnyxToolsWindow> Toolkit = OpenTools())
 				{
 					Toolkit->ShowTiles(Cast<UTexture2D>(Asset.GetAsset()));
 				}
@@ -412,7 +505,7 @@ private:
 			{
 				if (UTexture2D* Texture = Cast<UTexture2D>(Asset.GetAsset()))
 				{
-					FOnyxAssetFactory::ConfigurePixelArtTexture(Texture);
+					FOnyxAssetUtils::ConfigurePixelArtTexture(Texture);
 					OnyxTools::Notify(FText::Format(INVTEXT("{0}: pixel-art settings applied"), FText::FromString(Texture->GetName())), true);
 				}
 			})));
@@ -451,15 +544,26 @@ private:
 	{
 		if (UOnyx2DSettings::Get()->bAutoConfigurePixelArtTextures)
 		{
-			FOnyxAssetFactory::ConfigurePixelArtTexture(Cast<UTexture2D>(Object));
+			FOnyxAssetUtils::ConfigurePixelArtTexture(Cast<UTexture2D>(Object));
 		}
 	}
 
 	TWeakPtr<SDockTab> ToolsTab;
-	TWeakPtr<SOnyxToolkit> ToolkitWidget;
+	TWeakPtr<SOnyxToolsWindow> ToolkitWidget;
 	FDelegateHandle PostEngineInitHandle;
 	FDelegateHandle PostImportHandle;
 	FOnyxEditorLightingView LightingView;
+	IConsoleObject* OpenCommand = nullptr;
+	IConsoleObject* CaptureCommand = nullptr;
 };
 
 IMPLEMENT_MODULE(FOnyx2DEditorModule, Onyx2DEditor);
+
+void OnyxEditorTools::OpenMovesetEditor(UObject* Asset)
+{
+	FOnyx2DEditorModule& Module = FModuleManager::LoadModuleChecked<FOnyx2DEditorModule>("Onyx2DEditor");
+	if (TSharedPtr<SOnyxToolsWindow> Toolkit = Module.OpenToolsForAsset())
+	{
+		Toolkit->ShowAnimations(Asset);
+	}
+}

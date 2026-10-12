@@ -1,7 +1,9 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "World/OnyxPickup.h"
-#include "Character/OnyxPlayerCharacter.h"
+#include "Sound/SoundBase.h"
+#include "Audio/OnyxAudioSubsystem.h"
+#include "GameFramework/Pawn.h"
 #include "Combat/OnyxHealthComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -84,29 +86,27 @@ void AOnyxPickup::Tick(float DeltaSeconds)
 
 void AOnyxPickup::HandleOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
 {
-	AOnyxPlayerCharacter* Player = Cast<AOnyxPlayerCharacter>(OtherActor);
-	if (!Player || IsActorBeingDestroyed())
+	APawn* Player = Cast<APawn>(OtherActor);
+	if (!Player || !Player->IsPlayerControlled() || IsActorBeingDestroyed())
 	{
 		return;
 	}
 
 	if (Type == EOnyxPickupType::Health)
 	{
-		if (Player->Health->GetHealth() >= Player->Health->MaxHealth)
+		UOnyxHealthComponent* Health = Player->FindComponentByClass<UOnyxHealthComponent>();
+		if (!Health || Health->GetHealth() >= Health->MaxHealth)
 		{
 			return; // leave it for later
 		}
-		Player->Health->Heal(Amount);
+		Health->Heal(Amount);
 	}
 	else if (UOnyxScoreSubsystem* Score = UOnyxScoreSubsystem::Get(this))
 	{
 		Score->AddCoins(Amount);
 	}
 
-	if (CollectSound)
-	{
-		UGameplayStatics::PlaySoundAtLocation(this, CollectSound, GetActorLocation());
-	}
+	UOnyxAudioSubsystem::PlaySoundAt(this, CollectSound, GetActorLocation());
 	AOnyxFlipbookEffect::Spawn(this, CollectEffect, GetBobbingComponent()->GetComponentLocation(), Animated->GetComponentScale().X);
 	OnCollected.Broadcast(Player);
 	Destroy();

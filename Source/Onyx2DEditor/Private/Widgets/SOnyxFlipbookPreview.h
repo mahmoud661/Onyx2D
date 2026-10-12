@@ -21,8 +21,10 @@ struct FOnyxPreviewFrame
 class SOnyxFlipbookPreview : public SCompoundWidget, public FGCObject
 {
 public:
-	SLATE_BEGIN_ARGS(SOnyxFlipbookPreview) : _Height(220.f) {}
+	SLATE_BEGIN_ARGS(SOnyxFlipbookPreview) : _Height(220.f), _EmptyText(INVTEXT("No animation selected")) {}
 		SLATE_ARGUMENT(float, Height)
+		/** Shown while there is nothing to play. */
+		SLATE_ATTRIBUTE(FText, EmptyText)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);

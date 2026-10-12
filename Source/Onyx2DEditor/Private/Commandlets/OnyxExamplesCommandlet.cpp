@@ -1,7 +1,7 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "Commandlets/OnyxExamplesCommandlet.h"
-#include "Assets/OnyxMaterialBuilder.h"
+#include "Builders/OnyxMaterialBuilder.h"
 #include "Examples/OnyxSunnyLandExample.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOnyxExamples, Log, All);

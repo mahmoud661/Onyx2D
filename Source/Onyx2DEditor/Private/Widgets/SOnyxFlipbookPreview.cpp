@@ -9,7 +9,7 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScaleBox.h"
-#include "Widgets/OnyxToolWidgets.h"
+#include "ToolsWindow/OnyxToolWidgets.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
 
@@ -39,7 +39,7 @@ void SOnyxFlipbookPreview::Construct(const FArguments& InArgs)
 				+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
 				[
 					SNew(STextBlock)
-					.Text(INVTEXT("No animation selected"))
+					.Text(InArgs._EmptyText)
 					.Font(OnyxTools::Font(10))
 					.ColorAndOpacity(OnyxTools::Muted())
 					.Visibility_Lambda([this]() { return Frames.IsEmpty() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })

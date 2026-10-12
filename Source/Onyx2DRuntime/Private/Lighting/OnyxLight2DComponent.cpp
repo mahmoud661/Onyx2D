@@ -6,7 +6,38 @@
 
 UOnyxLight2DComponent::UOnyxLight2DComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = false; // ticks only while fading
+}
+
+void UOnyxLight2DComponent::BeginPlay()
+{
+	Super::BeginPlay();
+	bEnabledTarget = bStartEnabled;
+	EnabledAlpha = bStartEnabled ? 1.f : 0.f;
+}
+
+void UOnyxLight2DComponent::SetLightEnabled(bool bEnabled, float FadeTime)
+{
+	bEnabledTarget = bEnabled;
+	if (FadeTime <= KINDA_SMALL_NUMBER)
+	{
+		EnabledAlpha = bEnabled ? 1.f : 0.f;
+		SetComponentTickEnabled(false);
+		return;
+	}
+	FadeSpeed = 1.f / FadeTime;
+	SetComponentTickEnabled(true);
+}
+
+void UOnyxLight2DComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	EnabledAlpha = FMath::FInterpConstantTo(EnabledAlpha, bEnabledTarget ? 1.f : 0.f, DeltaTime, FadeSpeed);
+	if (EnabledAlpha == (bEnabledTarget ? 1.f : 0.f))
+	{
+		SetComponentTickEnabled(false);
+	}
 }
 
 FVector2D UOnyxLight2DComponent::GetPlanePosition() const

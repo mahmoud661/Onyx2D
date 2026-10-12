@@ -1,7 +1,9 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "Combat/OnyxCombatComponent.h"
-#include "Animation/OnyxAnimatorComponent.h"
+#include "Animation/OnyxClip.h"
+#include "Animation/OnyxClipWindow.h"
+#include "Animation/OnyxMovesetComponent.h"
 #include "Combat/OnyxHitboxComponent.h"
 #include "GameFramework/Actor.h"
 #include "Movement/OnyxMovementComponent.h"
@@ -11,11 +13,11 @@ UOnyxCombatComponent::UOnyxCombatComponent()
 	PrimaryComponentTick.bCanEverTick = true;
 
 	FOnyxAttack First;
-	First.Animation = TEXT("Attack1");
+	First.Clip = TEXT("Attack1");
 	FOnyxAttack Second = First;
-	Second.Animation = TEXT("Attack2");
+	Second.Clip = TEXT("Attack2");
 	FOnyxAttack Finisher = First;
-	Finisher.Animation = TEXT("Attack3");
+	Finisher.Clip = TEXT("Attack3");
 	Finisher.Duration = 0.42f;
 	Finisher.HitWindowEnd = 0.24f;
 	Finisher.Damage = 2.f;
@@ -33,7 +35,7 @@ void UOnyxCombatComponent::BeginPlay()
 		{
 			Hitbox = Owner->FindComponentByClass<UOnyxHitboxComponent>();
 		}
-		Animator = Owner->FindComponentByClass<UOnyxAnimatorComponent>();
+		MovesetComponent = Owner->FindComponentByClass<UOnyxMovesetComponent>();
 		Movement = Owner->FindComponentByClass<UOnyxMovementComponent>();
 	}
 }
@@ -68,8 +70,10 @@ void UOnyxCombatComponent::StartAttack(int32 Index)
 	Elapsed = 0.f;
 	SetHitWindow(false);
 
-	const float AnimationLength = Animator ? Animator->PlayOneShot(Attack.Animation) : 0.f;
-	CurrentDuration = AnimationLength > 0.f ? AnimationLength : Attack.Duration;
+	const float ClipLength = MovesetComponent ? MovesetComponent->PlayOneShot(Attack.Clip) : 0.f;
+	CurrentDuration = ClipLength > 0.f ? ClipLength : Attack.Duration;
+	const UOnyxClip* Clip = ClipLength > 0.f ? MovesetComponent->GetCurrentClip() : nullptr;
+	bClipOwnsHitWindow = Clip && Clip->HasWindow(UOnyxClipWindow_Hitbox::StaticClass());
 
 	if (Hitbox)
 	{
@@ -104,7 +108,10 @@ void UOnyxCombatComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 
 	Elapsed += DeltaTime;
 	const FOnyxAttack& Attack = Combo[CurrentIndex];
-	SetHitWindow(Elapsed >= Attack.HitWindowStart && Elapsed < Attack.HitWindowEnd);
+	if (!bClipOwnsHitWindow)
+	{
+		SetHitWindow(Elapsed >= Attack.HitWindowStart && Elapsed < Attack.HitWindowEnd);
+	}
 
 	const bool bHasNext = Combo.IsValidIndex(CurrentIndex + 1);
 	if (bHasNext && BufferRemaining > 0.f && Elapsed >= Attack.ChainTime)
@@ -123,9 +130,9 @@ void UOnyxCombatComponent::CancelAttack()
 {
 	if (IsAttacking())
 	{
-		if (Animator)
+		if (MovesetComponent)
 		{
-			Animator->StopOneShot();
+			MovesetComponent->StopOneShot();
 		}
 		FinishAttack();
 	}

@@ -6,6 +6,9 @@
 #include "Components/BoxComponent.h"
 #include "OnyxHitboxComponent.generated.h"
 
+class UPaperFlipbook;
+class USoundBase;
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnyxHitSignature, AActor*, Victim);
 
 /**
@@ -37,6 +40,14 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Hitbox")
 	FName DamageType = TEXT("Melee");
+
+	/** Played where a hit lands. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Hitbox")
+	TObjectPtr<USoundBase> HitSound;
+
+	/** Flipbook played once where a hit lands (sparks, a slash flash). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Hitbox")
+	TObjectPtr<UPaperFlipbook> HitEffect;
 
 	/** Always active (enemy bodies, spikes...). Victims can be hit again every RehitInterval seconds. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Hitbox")

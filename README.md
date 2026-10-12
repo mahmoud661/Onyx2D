@@ -3,23 +3,26 @@
 A complete 2D game framework for Unreal Engine 5.8, written in C++ and fully usable from Blueprint.
 Copy this folder into your project as `Plugins/Onyx2D`, open the project and the **Onyx2D** button appears in the toolbar.
 
-## Quick start
+## Installation
 
-1. Put the plugin in `YourProject/Plugins/Onyx2D`, open the project in UE 5.8 and let it compile. Run **Onyx2D → Configure Project for 2D**,
-   then **Set Up Level for 2D** on a level and press **Play**.
-2. Controls (keyboard / gamepad):
+1. Copy this folder into your project as `YourProject/Plugins/Onyx2D` (Unreal Engine 5.8). Paper2D and Enhanced Input are
+   enabled with it.
+2. Open the project and let Unreal compile the plugin (a Blueprint-only project asks to rebuild it; that needs Visual Studio
+   with the C++ game development workload).
+3. Run **Onyx2D → Configure Project for 2D** once: recommended renderer settings and the Onyx game mode as the default.
 
-| Action | Keyboard | Gamepad |
-|---|---|---|
-| Move | A / D, ← / → | Left stick, D-pad |
-| Jump (hold for higher) | Space, W, ↑ | A |
-| Dash | Left Shift, L | RB, B |
-| Attack (combo) | J, Left mouse | X |
-| Drop through platform | S + Jump | D-pad down + A |
-| Pause | Esc, P | Start |
+## Quick start: from art to a playable level
 
-No input assets are required: a full default scheme is built in code (`UOnyxInputConfig::CreateDefault`).
-Create a **Onyx Input Config** data asset and assign it to `OnyxPlayerController` to rebind.
+1. **Art:** open the **Onyx2D** window, go to the **Import** tab and drop your PNGs or art folders on it. Tile sheets become
+   tile sets, animations become characters, other images become sprites or backgrounds. Check the list, press **Build All**.
+2. **Characters:** make a **Moveset** (a character's clips by role: Idle, Run, Jump...). Cut each **Clip** from a sprite sheet
+   (**New Clip**), tune frame holds and add **events** on the timeline (messages, sounds, effects, hitbox windows), then
+   **New Character**: pick its behaviours (Hero = Player Control + Camera + Respawn; Patrolling Foe = Patrol + Contact Damage +
+   Stompable). Set your hero as **Default Player Class** in Project Settings → Onyx2D.
+3. **Level:** run **Set Up Level for 2D** on a level, then open the **Level Painter**, pick your tile set, press **New Map**
+   and paint. Switch to the Entities layer to drop the player, enemies, coins, checkpoints and the exit.
+4. **Polish:** add 2D lights and a lighting mood, a parallax background from the **Parallax** tab, then run **Check Level**.
+5. **UI:** set your title, levels, fonts and colours in Project Settings → Onyx2D UI.
 
 ## What you get
 
@@ -27,11 +30,15 @@ Create a **Onyx Input Config** data asset and assign it to `OnyxPlayerController
 | Feature | Class | Highlights |
 |---|---|---|
 | Platformer movement | `UOnyxMovementComponent` | Jump defined by **height + time to apex**, coyote time, jump buffer, variable jump height, apex hang, fall gravity, max fall speed, double jump, wall slide, wall jump, dash (ground + air), one-way platforms |
-| Characters | `AOnyxCharacter`, `AOnyxPlayerCharacter`, `AOnyxEnemyCharacter` | Built on Paper2D `APaperCharacter`; facing (also for art drawn looking left), lit sprites, sprite feet kept on the capsule bottom, crouch, hurt/death, fall death below the level, respawn, placeholder body until art exists |
-| Animation | `UOnyxAnimatorComponent` | Name → flipbook map, automatic Idle/Run/Jump/Fall/WallSlide/Dash/Crouch, one-shots, **frame events**; override `ResolveLocomotionAnimation` in Blueprint |
-| Combat | `UOnyxCombatComponent`, `UOnyxHitboxComponent`, `UOnyxHealthComponent` | Combo chains with input buffering, hit windows, lunge, knockback, i-frames, teams, contact damage |
+| Characters | `AOnyxCharacter` | One class for every character, built on Paper2D `APaperCharacter`: facing (also for art drawn looking left), lit sprites, sprite feet kept on the capsule bottom, crouch, hurt/death with an optional death effect, fall death below the level, placeholder body until art exists. **What it does comes from behaviour components** (below), not from subclasses |
+| Behaviours | `UOnyxPlayerControlComponent`, `UOnyxCameraComponent`, `UOnyxRespawnComponent`, `UOnyxPatrolComponent`, `UOnyxContactDamageComponent`, `UOnyxStompableComponent`, `UOnyxBehaviourLibrary` | Composition like Unity's components: the player drives a character with **Player Control** (input on its own input component, works on any pawn the player possesses); **Respawn** brings it back at checkpoints; a foe is **Patrol** + **Contact Damage** + **Stompable**. Mix freely, or write your own component |
+| Moveset assets | `UOnyxMoveset`, `UOnyxClip`, `UOnyxClipEvent`, `UOnyxClipWindow` | A **Moveset** is everything a character can play: its **Clips** by role (Idle, Run, Attack1...) and its **Messages**. A **Clip** is one animation: flipbook frames with per-frame holds, speed, loop, and **lanes** of timed **Events** (*Message*: runs the actor's function of that name and fires *On Clip Message*; *Sound*, *Effect*, *Camera Shake*, *Light Flash*, *Scene Flash*) and **Windows** that stay open for a span (*Hitbox*, *Invulnerable*, *Loop Sound*). Subclass either in C++ or Blueprint for your own |
+| Moveset playback | `UOnyxMovesetComponent` | Plays the character's **Moveset**: automatic Idle/Run/Jump/Fall/WallSlide/Dash/Crouch, one-shots (attacks, hurt, death), fires the playing clip's events and opens / closes its windows; override `ResolveLocomotionClip` in Blueprint |
+| Combat | `UOnyxCombatComponent`, `UOnyxHitboxComponent`, `UOnyxHealthComponent` | Combo chains with input buffering, hit windows (from the attack clip's *Hitbox* window when it has one), lunge, knockback, i-frames, teams, contact damage |
 | Interfaces | `IOnyxDamageable`, `IOnyxTeamMember`, `UOnyxCombatLibrary` | Make anything hittable (crates, switches) from C++ or Blueprint |
 | Game feel | `UOnyxFeedbackSubsystem` | Hit-stop, screen-shake trauma, sprite flash |
+| Audio | `UOnyxAudioSubsystem`, `AOnyxLevelAudio` | Music and ambience that crossfade across levels and zones, volume categories, 2D distance falloff (see *Audio* below) |
+| Interaction | `IOnyxInteractable`, `AOnyxLightSwitch` | The Interact input uses levers, doors, NPCs... (see *Interaction* below) |
 | Camera | `UOnyxCameraComponent`, `UOnyxCameraProfile`, `AOnyxCameraBounds` (Camera Zone) | Cinemachine-style framing: screen offset, dead zone + soft zone, per-axis damping, look-ahead, fall look-down, vertical follow modes, confining to zones and the level, profile blending, shake, pixel snap (see *Camera* below) |
 | 2D lighting | `AOnyxLightingEnvironment`, `UOnyxLight2DComponent`, `AOnyxLight2D`, `UOnyxShadowCasterComponent`, `UOnyxLightingSubsystem` | Real 2D lighting (no 3D lights on flat cards): soft 2D lights with 2D shadows, normal-map relief, moods with blending (see *2D Lighting* below) |
 | Tile collision | `UOnyxTileCollisionComponent`, `FOnyxTileCollision` | Per-tile **None / Solid / One-Way / Hazard** types, merged into a few boxes, invisible walls at the map edges (see *Collision* below) |
@@ -39,7 +46,7 @@ Create a **Onyx Input Config** data asset and assign it to `OnyxPlayerController
 | Pickups & progress | `AOnyxPickup`, `AOnyxCheckpoint`, `AOnyxLevelExit`, `UOnyxScoreSubsystem` | Coin / health pickups (glowing placeholder or your own animated flipbook, with a collect effect), checkpoints that set the respawn point and heal, level exits that fade out and open the next level, a coin counter that survives level changes |
 | Backgrounds | `AOnyxParallaxBackground`, `UOnyxParallaxComponent` | Any number of tiling texture layers, each with its own scroll factor and depth |
 | Prototyping | `AOnyxLevelBuilder` | **Type a level as text** (`#` block, `=` platform, `^` spikes, `P` player, `E` enemy, `L` light, `C` coin, `H` health, `K` checkpoint, `X` exit, `M` moving platform) with live editor preview |
-| Enemies | `UOnyxPatrolComponent`, `AOnyxEnemyCharacter` | **Walk** (turn at walls / ledges, chase), **Hop** (frogs, slimes), **Fly** (birds, bats: hover, face the player); stomp them Mario-style; death effects |
+| Patrols | `UOnyxPatrolComponent` | **Walk** (turn at walls / ledges, chase), **Hop** (frogs, slimes), **Fly** (birds, bats: hover, face the player); with Stompable they are defeated Mario-style |
 | Effects | `AOnyxFlipbookEffect` | Play any flipbook once at a spot (sparkles, puffs, explosions), centred whatever the sprites' pivot |
 | Game setup | `AOnyxGameMode`, `AOnyxPlayerController` | Works out of the box |
 | Settings | `UOnyxGameUserSettings` | Engine settings + master volume, brightness, mute when unfocused |
@@ -54,21 +61,24 @@ Built entirely in code, so it works with zero assets, and it is themeable in **P
 ### Editor module (`Onyx2DEditor`) — the **Onyx2D** panel inside Unreal
 The tools are built from standard editor widgets (Details panels, toolbars, list views, dockable tabs), so they look and behave like the rest of Unreal.
 Open them with the **Onyx2D** button on the main toolbar (its ⋮ dropdown jumps straight to a tool or a quick action) or **Tools → Onyx2D**.
-The panel opens in its own window (drag its tab into the editor to dock it); each tool is an inner tab you can rearrange or tear off, and the layout is remembered.
+The panel opens in its own window (drag its tab into the editor to dock it). A tool bar across the top is always there: click a tool to open
+or focus it, even after closing its tab, or **Reset Layout** to get every tab back. Each tool is an inner tab you can rearrange or tear off,
+and the layout is remembered. The console command `Onyx2D.Open <Tool>` (e.g. `Onyx2D.Open Library`) opens a tool directly.
 
 | Tool | What it does |
 |---|---|
+| **Home** | The start page: the steps from art to a playable level, each one a button (configure project, import, set up level, paint, fill, check and play), the Sunny Land example, and **Extend Onyx2D**: where your code goes, with **New Blueprint** / **New C++ Class** buttons for every Onyx base class (player, enemy, patrol behaviour, pickup, light, hazard, platform, checkpoint, exit, game mode, controller). C++ classes go in your game module, never in the plugin. |
+| **Library** | Everything Onyx-ready in the project, with thumbnails: characters, enemies, objects (Blueprints and your own C++ classes built on Onyx classes), tile sets, tile maps, movesets, clips and flipbooks. Pick one to see it play (characters: a button per animation); **Place in Level**, **Edit Moveset**, **Paint With It**, **Open** (C++ classes open their source), **Show in Content Browser**. Updates by itself as assets change. |
 | **Import** | Drop PNG files or whole folders from the file explorer (or **Add Files / Add Folder**) and Onyx2D builds everything: tile sheets become padded, lit tile sets with collision (tile size, gaps and border detected from the file name, transparent gaps or tile edges); animations become a playable character (frame sequences `run-1.png, run-2.png...`, one strip per animation `idle.png, run.png`, or a sheet with one animation per row: words like *idle, run, jump, fall, attack, hurt, death, crouch, climb* pick the animation, the rest of the name or the folder groups files per character; all frames share one cell with the feet on one line); numbered frames without an animation word become animated sprites; prop sheets are cut into one sprite per prop; backgrounds become textures for the Parallax tab. Every guess is listed (type, name, tile size, Player/Enemy) and can be changed before **Build All**. Scripts can call `UOnyxEditorLibrary::ImportArt`. |
-| **Character Wizard** | Details panel with the sheet, frame size, output folder, Player/Enemy and the animation rows (row, start column, frame count, FPS, loop, optional strip image). **Detect Frame Size** finds the grid from the transparent gaps; frame counts stop at the first empty cell. The sheet view outlines the frames of the animation picked in the preview, which plays with transport controls. **Auto Fit Capsule** sizes the collision capsule to the visible pixels and puts the feet on the ground. **Create Character** makes sprites, flipbooks and a ready Blueprint (warnings go to the *Onyx2D* Message Log). |
-| **Animations** | Pick a Onyx character in the toolbar to get a table of its animations (double-click to rename, flipbook, play rate, loop, frame count) with a live preview and a **Frame Events** table (add at the current frame). Every edit is undoable; Save / Open Blueprint in the toolbar. |
+| **Movesets** | The Moveset Editor. Left: the **Moveset**'s clips by role (missing standard roles, like Run or Hurt, are one click away). Middle: a big preview with transport controls (play, step, loop; sounds play while previewing) and the **timeline**: a block per frame as wide as its hold (drag the right edge to change it, drag to reorder, right-click to duplicate / delete) and event **lanes** (right-click to send a Message or add a Sound, Effect, Camera Shake, a Window or your own event at that time; drag to move, snaps to frames), a ruler to scrub (Ctrl + wheel zooms). Right: the clip's loop / frames per second / speed, the selected frame (hold, sprite) and the selected event. **New Clip** opens the sprite sheet slicer (detects the grid; click frames in play order or drag across a run). **New Character** makes a playable character from the moveset with the behaviours and team you pick. Double-clicking a Moveset or a Clip opens it here; everything is undoable. |
 | **Tiles** | Details panel for tile sheet, tile size, margin, spacing, collision and the map (size, scale, ground rows/tile). **Create Tile Set** / **Create Tile Map** (places the map and opens it in the Level Painter). The ground tile is outlined on the sheet. |
-| **Level Painter** | LDtk-style level editor. **Layers** on the left (the tile map's tile layers plus an **Entities** layer, each with an eye toggle), your **tile set palette** or the **entity palette** under them, a big canvas in the middle and an **Inspector** on the right. Tools: **Brush (B)**, **Rectangle (R)**, **Fill (F)**, **Erase (E)**, **Pick (I)**, **Select (S)**, **Terrain (T)** (auto-tiling); brush options **Flip X (X)**, **Flip Y (Y)** and **Random (V)** (each cell a random tile from the selected block); right-drag erases, middle-drag or Space+drag pans, the wheel zooms. Tiles go straight into the Paper2D tile map (with collision on Ground); entities (player start, enemy, coin, health, checkpoint, exit, moving/one-way platform, hazard, light) are real actors placed on the cell, which you can drag around and edit in the Inspector. **New Map** makes a 60x24 map from the selected tile set and places it in the level. Everything is undoable. |
+| **Level Painter** | LDtk-style level editor. **Layers** on the left (the tile map's tile layers plus an **Entities** layer, each with an eye toggle), your **tile set palette** or the **entity palette** under them, a big canvas in the middle and an **Inspector** on the right. Tools: **Brush (B)**, **Rectangle (R)**, **Fill (F)**, **Erase (E)**, **Pick (I)**, **Select (S)**, **Terrain (T)** (auto-tiling); brush options **Flip X (X)**, **Flip Y (Y)** and **Random (V)** (each cell a random tile from the selected block); right-drag erases, middle-drag or Space+drag pans, the wheel zooms. Tiles go straight into the Paper2D tile map (with collision on Ground); entities (player start, patrolling foe, coin, health, checkpoint, exit, moving/one-way platform, hazard, light) are real actors placed on the cell, which you can drag around and edit in the Inspector; the canvas only shows the objects that sit on this map. **New Map** asks for a name, size and optional ground row, makes the map from the selected tile set and places it beside the maps already in the level. Everything is undoable. |
 | **Parallax** | **Add Background** places an `AOnyxParallaxBackground`; its layers are edited right in the panel. **Add Layers** turns every texture selected in the Content Browser into a layer (far to near, with sensible factors and depths). |
 | **Level** | **Set Up Level**, **Configure Project** (turns off Lumen, virtual shadow maps, distance fields, motion blur, auto exposure and TAA; makes Onyx Game Mode the default), **Check Level**, Play, Settings, Help. A grid of every Onyx actor: click to place it where the viewport looks, or drag it into the viewport. The **Level Check** lists problems (missing player start, wrong game mode, no lights, actors off the gameplay plane, unlit sprites, exits without a next level...) each with a **Fix** button, plus **Fix All**; double-click selects the actor. |
 
 Unreal integration:
 - **Place Actors → Onyx2D** category (and the toolbar's quick Add menu) with all Onyx actors.
-- **Content Browser → right-click a texture → Onyx2D**: *Create Onyx Character…*, *Create Onyx Tile Set…* (opens the tool pre-filled), *Apply Pixel-Art Settings*. Right-click a tile map → *Paint in Level Painter*.
+- **Content Browser → right-click a texture → Onyx2D**: *Make Clip from Sheet…*, *Create Onyx Tile Set…* (opens the tool pre-filled), *Apply Pixel-Art Settings*. Right-click a tile map → *Paint in Level Painter*.
 - Custom icons for the plugin, the tools and every Onyx actor class (Outliner, Content Browser, Place Actors).
 
 Everything is C++. The same builders are also exposed to **Editor Utility Blueprints** through `UOnyxEditorLibrary`
@@ -105,9 +115,34 @@ Sprites are lit the way 2D engines do it (like Unity's 2D renderer), not by 3D l
   from solid tiles (Onyx Tile Collision) and **Onyx Shadow Caster 2D** shapes; light soaks a little into tile surfaces.
   The **Onyx Light 2D** actor adds presets (torch, candle, lantern, magic, crystal, lava, window), flicker / pulse and a glow halo.
 - A post-process composite lights every lit sprite from that buffer (`PP_OnyxLight2D`); **normal maps** give the art relief.
-  Generate them with *right-click a texture / sprite / tile set > Generate Normal Map*; the Character Wizard and Tiles tool make them automatically.
+  Generate them with *right-click a texture / sprite / tile set > Generate Normal Map*; the Moveset Editor, the importer and the Tiles tool make them automatically.
 - **Camera Zones** can carry a **Lighting Profile**: walk into a cave and the mood fades to dark; scripts can `PushOverride` a mood too.
 - The editor viewport shows the same lighting while you build the level.
+- **Day and night:** tick *Day Night Cycle* on Onyx Lighting, set the *Day Length* and the moods through the day (night, dawn,
+  day, dusk by default); scrub *Time Of Day* to preview the level at any hour. *On Day Phase Changed* fires at nightfall and daybreak.
+- **Switching lights:** every light fades on / off (`Set Light Enabled`, *Start Enabled*); the **Onyx Light Switch** (a lever, or a
+  pressure plate with *Switch On Touch*) controls any number of lights. Onyx Light 2D actors can carry a looping **Ambient Sound**
+  (a crackling torch) and a **Switch Sound**, both following the light.
+- **Flashes:** `Flash` on the lighting subsystem lights up the whole scene for a moment (lightning, explosions); `AOnyxLightFlash::Spawn`
+  makes a short burst of 2D light. Both are also clip **events**: *Scene Flash* and *Light Flash* on the timeline.
+
+## Audio
+
+- **Onyx Audio** (`UOnyxAudioSubsystem`) plays everything: a **music** channel and an **ambience** channel that crossfade and keep
+  playing across level loads, sounds by category so the **Music / Sound Effects / Interface** sliders (Settings > Audio, on top
+  of Master) apply, and a distance falloff made for side-on worlds (full volume around the camera, panned left / right further out).
+- **Onyx Level Audio** sets a level's music and ambience (Set Up Level for 2D adds one). **Camera Zones** have *Music* and
+  *Ambience*: walk into the cave and the cave track fades in, walk out and the level's comes back.
+- **Characters** have *Sounds* (jump, land, dash, hurt, death) with a little pitch variation; footsteps and swings are **Sound
+  events** on a clip's timeline (they can follow the character). **Hitboxes** have a *Hit Sound* and *Hit Effect*;
+  checkpoints, level exits, pickups and light switches have their own sounds.
+- From Blueprint: *Play Sound At*, *Play Sound 2D*, *Play Sound Attached*, *Set Level Music*, *Push Music* / *Pop Music* (boss fights).
+
+## Interaction
+
+The **Interact** input uses the nearest thing the character touches that implements **Onyx Interactable** (C++ or Blueprint:
+*Interact*, and optionally *Is Interaction Locked* and *Get Interaction Prompt*): levers, doors, signs, chests, NPCs. The Light Switch is one. With nothing to
+use, Player Control's *On Interact* fires instead.
 
 ## Camera
 
@@ -136,7 +171,7 @@ The player camera (`UOnyxCameraComponent`) follows the rules of Unity's Cinemach
   while the camera moves. Automatic for tile sets made by the Tiles tool; for others use *right-click a tile set > Fix Tile Seams*
   (the Level Check offers it too). Indices, collision and terrains are kept.
 - **Pixel-perfect camera** (Camera > Pixels, on by default): whole screen pixels per art pixel, orthographic, snapped to the screen-pixel grid.
-  The Character Wizard sets Art Pixel Size to the character's Centimeters Per Pixel (4 by default, the same as tiles).
+  New characters get Art Pixel Size = their Centimeters Per Pixel (4 by default, the same as tiles).
 - **Sprite pixel snapping** (Onyx characters, animated pickups): sprites are drawn on whole art pixels while movement stays smooth.
 - Tile maps sit just behind the gameplay plane (Y = -20) so sprites never z-fight with background tiles; the Level Check fixes old maps.
 - The Onyx camera pins its aspect-ratio axis, so the confiner, framing and 2D light buffer always match what is rendered.
@@ -154,15 +189,11 @@ Importers used there (also in the editor):
 - `ImportTiledMap` (Tiled JSON: layers, names, visibility, flipped / rotated tiles), `CreateCharacterFromStrips`, `SetTileCollision`,
   `CreateTerrain` / `PaintTerrain` in `UOnyxEditorLibrary` for Editor Utility Blueprints.
 
-## Making a game with it
+## Input
 
-1. **Art:** drag your sprite sheets into the Content Browser (pixel-art settings are applied automatically).
-2. **Player:** right-click the sheet → **Onyx2D → Create Onyx Character…**, check the rows, then click **Create Character**.
-   Set it as **Default Player Class** in Project Settings → Onyx2D. Tune **Movement → Jump Settings** on the Blueprint.
-3. **Enemies:** Blueprint children of `OnyxEnemyCharacter` (patrol + contact damage) or `OnyxCharacter`.
-4. **Levels:** open **Onyx2D → Level Painter**, pick your tile set, press **New Map**, paint the ground, then switch to the Entities layer and drop the player, enemies, coins, checkpoints and the exit (or block out with `OnyxLevelBuilder`). Drop pickups, checkpoints, moving platforms and an exit from **Onyx2D → Level**, add a parallax background, then run **Check Level**.
-5. **Shadows:** give flat objects a `OnyxShadowCaster` component and keep backgrounds lit (any lit material).
-6. **UI:** set your title, levels, fonts and colors in Project Settings → Onyx2D UI.
+`AOnyxPlayerController` comes with a default set of bindings (move, jump, dash, attack, drop through one-way platforms,
+pause) for keyboard and gamepad, built in code (`UOnyxInputConfig::CreateDefault`), so a new project needs no input assets.
+To use your own bindings, create an **Onyx Input Config** data asset and assign it to the player controller (or your subclass).
 
 ## Architecture
 
@@ -172,7 +203,9 @@ Importers used there (also in the editor):
 - **Dependency inversion.** The runtime never references the UI: pause goes through `FOnyxGameDelegates::OnPauseRequested`,
   and screen shake goes through `UOnyxFeedbackSubsystem::OnTrauma`.
 - **Interfaces** (`IOnyxDamageable`, `IOnyxTeamMember`) keep combat open for new hittable things without changes.
-- **Open for extension.** Blueprint-native events (`ResolveLocomotionAnimation`), soft-class screen overrides and data-asset input.
+- **Open for extension.** Blueprint-native events (`ResolveLocomotionClip`), your own clip events and windows, soft-class screen overrides and data-asset input.
+
+The class map, naming rules and source folders are in [ARCHITECTURE.md](ARCHITECTURE.md).
 - **Registries instead of actor iteration** (`UOnyxWorldSubsystem`) keep per-frame queries cheap.
 
 ## Plugin layout
@@ -182,7 +215,8 @@ Onyx2D/
 ├─ LICENSE
 ├─ Source/Onyx2DRuntime/   gameplay, 2D lighting, camera, world actors
 ├─ Source/Onyx2DUI/        menus, HUD, settings
-├─ Source/Onyx2DEditor/    editor tools: Level Painter, Character Wizard, importers, examples
+├─ Source/Onyx2DEditor/    editor tools: Moveset Editor, Level Painter, importers, examples
+├─ ARCHITECTURE.md         class map, naming rules, folders
 ├─ Content/Materials/      lit sprite, 2D lighting composite, glow (generated from C++)
 ├─ Resources/              icons
 └─ Extras/SunnyLand/       art for the Sunny Land example (CC0)
