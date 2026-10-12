@@ -41,8 +41,11 @@ struct FOnyxStamp
 struct FOnyxPlacedObject
 {
 	AActor* Actor = nullptr;
+	/** The cell it stands on (area objects: their top-left cell). */
 	FIntPoint Cell = FIntPoint::ZeroValue;
 	FName Layer;
+	/** Area objects (water): every cell they cover, Min and Max included. */
+	TOptional<FIntRect> Area;
 };
 
 /**
@@ -66,6 +69,8 @@ public:
 	bool IsValidCell(const FIntPoint& Cell) const;
 	bool WorldToCell(const FVector& Location, FIntPoint& OutCell) const;
 	FVector CellToWorld(const FIntPoint& Cell) const;
+	/** A world position as map pixels from the map's top-left corner (tile pixels, not rounded): draws actors where they really are. */
+	FVector2D WorldToMapPixels(const FVector& Location) const;
 	void Resize(const FIntPoint& NewSize);
 
 	// --- Tile layers -----------------------------------------------------------------------
@@ -112,8 +117,19 @@ public:
 	// --- Object layers ---------------------------------------------------------------------
 	AActor* PlaceObject(const FIntPoint& Cell, const FOnyxPainterBrush& Brush, FName ObjectLayer);
 	bool EraseObject(const FIntPoint& Cell, FName ObjectLayer);
-	AActor* FindObject(const FIntPoint& Cell, FName ObjectLayer) const;
+	/** The object on a cell: one standing there first, else an area object covering it (unless bIncludeAreas is false). */
+	AActor* FindObject(const FIntPoint& Cell, FName ObjectLayer, bool bIncludeAreas = true) const;
 	bool MoveObject(AActor* Actor, const FIntPoint& Cell);
+
+	// --- Area objects (water) ----------------------------------------------------------------
+	/** World rectangle (X and Z of Min / Max) covered by a block of cells, Min and Max included. */
+	FBox CellsToWorldBox(const FIntRect& Cells) const;
+	/** The cells an area object covers (to the nearest grid line). False for other objects. */
+	bool GetAreaCells(const AActor* Actor, FIntRect& OutCells) const;
+	/** Places an area brush's actor over a block of cells. */
+	AActor* PlaceArea(const FIntRect& Cells, const FOnyxPainterBrush& Brush, FName ObjectLayer);
+	/** Moves and resizes an area object to cover a block of cells. */
+	bool SetAreaCells(AActor* Actor, const FIntRect& Cells);
 	void ForEachObject(TFunctionRef<void(const FOnyxPlacedObject&)> Visit) const;
 	static FName GetObjectLayer(const AActor* Actor);
 	/** Depth (Y) objects of an object layer are placed at: behind the tiles, on the gameplay plane or in front. */

@@ -18,6 +18,8 @@ enum class EOnyxStrokePhase : uint8
 
 DECLARE_DELEGATE_ThreeParams(FOnOnyxCanvasStroke, EOnyxStrokePhase /*Phase*/, FIntPoint /*Cell*/, bool /*bSecondary*/);
 DECLARE_DELEGATE_RetVal_OneParam(FReply, FOnOnyxCanvasKey, const FKeyEvent&);
+/** The mouse cursor to show over a point of the map (in map pixels); unset = the default. */
+DECLARE_DELEGATE_RetVal_OneParam(TOptional<EMouseCursor::Type>, FOnOnyxCanvasCursor, FVector2D /*MapPixels*/);
 
 /**
  * LDtk-style map canvas: draws the tile layers and gameplay entities of a tile map,
@@ -43,6 +45,7 @@ public:
 		SLATE_ATTRIBUTE(TWeakObjectPtr<AActor>, SelectedActor)
 		SLATE_EVENT(FOnOnyxCanvasStroke, OnStroke)
 		SLATE_EVENT(FOnOnyxCanvasKey, OnKey)
+		SLATE_EVENT(FOnOnyxCanvasCursor, OnQueryCursor)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -50,6 +53,8 @@ public:
 	/** Frames the whole map on the next paint. */
 	void RequestFit() { bFitRequested = true; }
 	FIntPoint GetHoverCell() const { return HoverCell; }
+	/** The cursor in map pixels from the map's top-left corner (not rounded to a cell). */
+	FVector2D GetHoverMapPixels() const { return (HoverLocal - Pan) / FMath::Max(Zoom, 0.01f); }
 	bool IsHovering() const { return bHasHover; }
 	float GetZoom() const { return Zoom; }
 
@@ -74,8 +79,16 @@ private:
 	void DrawTile(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, const FPaperTileInfo& Tile,
 		const FVector2f& Position, float Size, const FLinearColor& Tint) const;
 	/** Draws a brush on a cell: the sprite for sprite/flipbook brushes, a colored box + icon otherwise. */
+	/** Draws an actor's sprites where they are in the level (animated); false if it shows none. Out = the area covered. */
+	bool DrawActorSprites(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, const AActor* Actor,
+		const FVector2f& MapMin, FVector2f& OutMin, FVector2f& OutMax) const;
 	void DrawBrush(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, const FOnyxPainterBrush& Brush,
 		const FVector2f& CellMin, const FVector2f& CellSize, float Opacity) const;
+	/** Draws an area object (water) over a rectangle: its colours, its top edge and, when selected, resize handles. Actor may be null (preview). */
+	void DrawArea(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, const FOnyxPainterBrush& Brush, const AActor* Actor,
+		const FVector2f& Min, const FVector2f& Max, float Opacity, bool bSelected) const;
+	/** Where an area object is on the canvas (from where it really is in the level). */
+	bool GetAreaRect(const FOnyxPainterBrush& Brush, const AActor* Actor, const FVector2f& MapMin, FVector2f& OutMin, FVector2f& OutMax) const;
 
 	FOnyxMapPainter* Painter = nullptr;
 	TAttribute<bool> ShowGrid;
@@ -88,9 +101,13 @@ private:
 	TAttribute<TWeakObjectPtr<AActor>> SelectedActor;
 	FOnOnyxCanvasStroke OnStroke;
 	FOnOnyxCanvasKey OnKey;
+	FOnOnyxCanvasCursor OnQueryCursor;
+	FVector2D HoverLocal = FVector2D::ZeroVector;
 
 	mutable FVector2D Pan = FVector2D(40.f, 40.f);
 	mutable float Zoom = 2.f;
+	/** Brushes for drawing placed actors' sprites (one per sprite drawn this frame). */
+	mutable TArray<FSlateBrush> ActorBrushes;
 	mutable bool bFitRequested = true;
 	mutable FSlateBrush TileBrush;
 	mutable FSlateBrush SpriteBrush;

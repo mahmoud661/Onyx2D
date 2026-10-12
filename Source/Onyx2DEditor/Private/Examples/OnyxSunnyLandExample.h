@@ -4,6 +4,8 @@
 
 #include "CoreMinimal.h"
 
+class UPaperSprite;
+
 /**
  * Builds a complete, playable example from "Sunny Land" by ansimuz (CC0, opengameart.org/node/74142):
  * animated fox player, opossum / eagle / frog enemies (walk / fly / hop, stompable), cherries and gems with
@@ -21,5 +23,12 @@ public:
 	/** Builds (or rebuilds) every asset and the level. Returns false with a reason when it can't. */
 	static bool Build(FText& OutError);
 
+	/** One of the pack's props (PNG/environment/props/<Name>.png) as a lit sprite in /Game/SunnyLand/Props. */
+	static UPaperSprite* ImportProp(const FString& Name);
+
 	static const TCHAR* LevelPath;
+	/** Assets the example makes. */
+	static const TCHAR* ContentFolder;
+	/** World size of one of the pack's pixels, in cm. */
+	static constexpr float PixelSize = 4.f;
 };

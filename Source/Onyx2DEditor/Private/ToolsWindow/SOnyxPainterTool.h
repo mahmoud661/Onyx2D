@@ -80,6 +80,13 @@ private:
 	void HandleStroke(EOnyxStrokePhase Phase, FIntPoint Cell, bool bSecondary);
 	void ApplyAt(const FIntPoint& Cell, bool bErase);
 	void ApplyRect(const FIntRect& Rect, bool bErase);
+	/** Adds the selected area brush's object (water) over a block of cells and selects it. */
+	void PlaceArea(const FIntRect& Cells);
+	/** Edges of the selected area object near a map point (EAreaEdge flags; 0 = none). */
+	int32 GetAreaEdgesAt(const FVector2D& MapPixels) const;
+	/** The block of cells the dragged area object should cover, with the mouse over Cell. */
+	FIntRect GetDraggedArea(const FIntPoint& Cell) const;
+	TOptional<EMouseCursor::Type> GetCursorFor(FVector2D MapPixels) const;
 	FReply HandleKey(const FKeyEvent& Event);
 	void AddSelectedAssetsAsBrushes();
 	void CreateNewMap();
@@ -115,6 +122,11 @@ private:
 	bool bRectErase = false;
 	TWeakObjectPtr<AActor> SelectedActor;
 	bool bDraggingActor = false;
+	/** Dragging the selected area object: moving it, or resizing it by these edges (EAreaEdge flags). */
+	bool bMovingArea = false;
+	int32 GrabbedEdges = 0;
+	FIntRect GrabStartArea;
+	FIntPoint GrabStartCell = FIntPoint::ZeroValue;
 	bool bWarnedNoActor = false;
 	FIntPoint NewSize = FIntPoint(60, 24);
 

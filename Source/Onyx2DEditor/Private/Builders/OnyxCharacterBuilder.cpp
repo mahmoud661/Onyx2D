@@ -41,6 +41,7 @@ TArray<FOnyxClipSpec> FOnyxCharacterSpec::DefaultClips()
 		{ TEXT("Death"), 10.f, false, true },
 		{ TEXT("Dash"), 14.f, false, false },
 		{ TEXT("WallSlide"), 8.f, true, false },
+		{ TEXT("Swim"), 8.f, true, false },
 	};
 
 	TArray<FOnyxClipSpec> Result;

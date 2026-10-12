@@ -102,7 +102,7 @@ bool UOnyxMovesetComponent::ApplyClip(FName Role, bool bForceRestart)
 
 FName UOnyxMovesetComponent::ResolveLocomotionClip_Implementation(EOnyxLocomotion State) const
 {
-	static const FName Idle(TEXT("Idle")), Run(TEXT("Run")), Jump(TEXT("Jump")), Fall(TEXT("Fall")), WallSlide(TEXT("WallSlide")), Dash(TEXT("Dash")), Crouch(TEXT("Crouch"));
+	static const FName Idle(TEXT("Idle")), Run(TEXT("Run")), Jump(TEXT("Jump")), Fall(TEXT("Fall")), WallSlide(TEXT("WallSlide")), Dash(TEXT("Dash")), Crouch(TEXT("Crouch")), Swim(TEXT("Swim"));
 
 	auto FirstAvailable = [this](std::initializer_list<FName> Candidates)
 	{
@@ -124,6 +124,7 @@ FName UOnyxMovesetComponent::ResolveLocomotionClip_Implementation(EOnyxLocomotio
 	case EOnyxLocomotion::WallSlide: return FirstAvailable({ WallSlide, Fall, Idle });
 	case EOnyxLocomotion::Dash:      return FirstAvailable({ Dash, Run, Idle });
 	case EOnyxLocomotion::Crouch:    return FirstAvailable({ Crouch, Idle });
+	case EOnyxLocomotion::Swim:      return FirstAvailable({ Swim, Fall, Idle });
 	default:                         return Idle;
 	}
 }

@@ -30,6 +30,7 @@ namespace
 		{ TEXT("OnyxCheckpoint"), TEXT("Checkpoint") },
 		{ TEXT("OnyxOneWayPlatform"), TEXT("OneWayPlatform") },
 		{ TEXT("OnyxHazardVolume"), TEXT("Hazard") },
+		{ TEXT("OnyxWater"), TEXT("Water") },
 		{ TEXT("OnyxLight2D"), TEXT("Light2D") },
 		{ TEXT("OnyxLightingEnvironment"), TEXT("Lighting") },
 		{ TEXT("OnyxCameraBounds"), TEXT("CameraBounds") },

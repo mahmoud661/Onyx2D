@@ -29,7 +29,9 @@ enum class EOnyxLocomotion : uint8
 	Fall,
 	WallSlide,
 	Dash,
-	Crouch
+	Crouch,
+	/** In Onyx Water. */
+	Swim
 };
 
 namespace Onyx2D

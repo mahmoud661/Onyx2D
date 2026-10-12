@@ -59,11 +59,12 @@
 #include "World/OnyxPickup.h"
 
 const TCHAR* FOnyxSunnyLandExample::LevelPath = TEXT("/Game/Maps/SunnyLand");
+const TCHAR* FOnyxSunnyLandExample::ContentFolder = TEXT("/Game/SunnyLand");
 
 namespace
 {
-	const TCHAR* Root = TEXT("/Game/SunnyLand");
-	constexpr float CmPerPixel = 4.f;
+	const TCHAR* Root = FOnyxSunnyLandExample::ContentFolder;
+	constexpr float CmPerPixel = FOnyxSunnyLandExample::PixelSize;
 	constexpr int32 TilePixels = 16;
 	constexpr float TileWorld = TilePixels * CmPerPixel;
 	constexpr int32 MapHeightTiles = 25;
@@ -566,6 +567,29 @@ FString FOnyxSunnyLandExample::GetPackFolder()
 bool FOnyxSunnyLandExample::IsPackPresent()
 {
 	return FPaths::FileExists(GetPackFolder() / TEXT("code/sunny-land/assets/maps/map.json"));
+}
+
+UPaperSprite* FOnyxSunnyLandExample::ImportProp(const FString& Name)
+{
+	const FString AssetName = Name.Replace(TEXT("-"), TEXT("_"));
+	const FString Folder = FString(Root) / TEXT("Props");
+	UAssetImportTask* Task = NewObject<UAssetImportTask>();
+	Task->Filename = GetPackFolder() / TEXT("PNG/environment/props") / (Name + TEXT(".png"));
+	Task->DestinationPath = Folder;
+	Task->DestinationName = TEXT("T_") + AssetName;
+	Task->bAutomated = true;
+	Task->bReplaceExisting = true;
+	Task->bSave = true;
+	FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get().ImportAssetTasks({ Task });
+	UTexture2D* Texture = LoadObject<UTexture2D>(nullptr, *(Folder / (TEXT("T_") + AssetName) + TEXT(".T_") + AssetName));
+	if (!Texture)
+	{
+		return nullptr;
+	}
+	UPaperSprite* Sprite = UOnyxEditorLibrary::CreateSpriteFromCell(Texture, FIntPoint(Texture->Source.GetSizeX(), Texture->Source.GetSizeY()), FIntPoint::ZeroValue,
+		TEXT("S_") + AssetName, Folder, CmPerPixel);
+	UOnyxEditorLibrary::GenerateNormalMap(Texture);
+	return Sprite;
 }
 
 bool FOnyxSunnyLandExample::Build(FText& OutError)

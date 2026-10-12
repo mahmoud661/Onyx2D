@@ -105,6 +105,53 @@ struct ONYX2DRUNTIME_API FOnyxWallSettings
 	float ProbeDistance = 12.f;
 };
 
+/** How a character moves in Onyx Water: Jump strokes upward (and jumps out at the surface), Down dives. */
+USTRUCT(BlueprintType)
+struct ONYX2DRUNTIME_API FOnyxSwimSettings
+{
+	GENERATED_BODY()
+
+	/** Off: the character ignores water (walks along the bottom, like a heavy knight). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim")
+	bool bCanSwim = true;
+
+	/** Left / right speed in water, cm/s. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0"))
+	float SwimSpeed = 320.f;
+
+	/** How quickly it reaches that speed or stops, cm/s². */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0"))
+	float SwimAcceleration = 1600.f;
+
+	/** Upward speed of a stroke (Jump under water). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0"))
+	float StrokeSpeed = 460.f;
+
+	/** Pull down between strokes, as a part of normal gravity: below 0 floats up to the surface (default), 0 hovers, above 0 sinks. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (UIMin = "-0.5", UIMax = "1"))
+	float SinkGravityScale = -0.08f;
+
+	/** Fastest sinking speed, cm/s. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0"))
+	float MaxSinkSpeed = 200.f;
+
+	/** Sinking speed while holding Down, cm/s. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0"))
+	float DiveSpeed = 380.f;
+
+	/** Height of the jump out of the water (Jump at the surface), cm. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0"))
+	float ExitJumpHeight = 200.f;
+
+	/** Part of the falling speed kept when landing in water (the rest goes into the splash). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0", ClampMax = "1"))
+	float EntrySpeedKept = 0.35f;
+
+	/** Bob at the surface with the head out instead of swimming up out of the water. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim")
+	bool bFloatAtSurface = true;
+};
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnyxMovementSignature);
 
 /**
@@ -121,7 +168,8 @@ public:
 
 	enum ECustomMode : uint8
 	{
-		CMOVE_OnyxDash = 0
+		CMOVE_OnyxDash = 0,
+		CMOVE_OnyxSwim = 1
 	};
 
 	// ------------------------------------------------------------- Tuning
@@ -145,6 +193,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Wall")
 	FOnyxWallSettings WallSettings;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Swim")
+	FOnyxSwimSettings SwimSettings;
 
 	// ------------------------------------------------------------- Commands
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
@@ -189,6 +240,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
 	bool IsMovementLocked() const { return bMovementLocked; }
 
+	/** True while swimming in Onyx Water. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	bool IsSwimmingInWater() const { return MovementMode == MOVE_Custom && CustomMovementMode == CMOVE_OnyxSwim; }
+
+	/** The water the character is in (null on land). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	class AOnyxWater* GetWater() const { return Water.Get(); }
+
+	/** Called by Onyx Water while the character overlaps it / when it leaves. */
+	void SetWater(class AOnyxWater* InWater);
+	void ClearWater(const class AOnyxWater* InWater);
+
 	/** 0 = ready, 1 = just used. */
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
 	float GetDashCooldownFraction() const;
@@ -211,6 +274,18 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
 	FOnyxMovementSignature OnLandedEvent;
+
+	/** Started swimming (fell or walked into deep enough water). */
+	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
+	FOnyxMovementSignature OnStartedSwimming;
+
+	/** Left the water (jumped or climbed out). */
+	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
+	FOnyxMovementSignature OnStoppedSwimming;
+
+	/** A swim stroke (Jump under water). */
+	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
+	FOnyxMovementSignature OnSwimStroke;
 
 	/** Re-applies RunSpeed/Acceleration/... to the underlying CharacterMovement values. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
@@ -240,6 +315,12 @@ private:
 	void UpdateOneWayPlatforms();
 	bool IsOneWaySurface(const UPrimitiveComponent* Component) const;
 	void PhysDash(float DeltaTime, int32 Iterations);
+	void PhysSwim(float DeltaTime, int32 Iterations);
+	/** Starts / stops swimming as the capsule goes under / above the surface. */
+	void UpdateSwimming();
+	/** Jump while swimming: a stroke, or a jump out at the surface. */
+	void SwimJump();
+	float GetCapsuleHalfHeight() const;
 	void EndDash();
 	void HandleLanded();
 
@@ -261,4 +342,7 @@ private:
 	bool bMovementLocked = false;
 
 	TWeakObjectPtr<UPrimitiveComponent> DropThroughSurface;
+	TWeakObjectPtr<class AOnyxWater> Water;
+	/** After jumping out of the water: don't start swimming again straight away. */
+	float WaterExitTimer = 0.f;
 };

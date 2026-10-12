@@ -55,6 +55,17 @@ namespace
 	constexpr int32 DecorItem = -2;
 	constexpr int32 BackgroundItem = -3;
 
+	/** Edges of an area object (water) grabbed to resize it. */
+	enum EOnyxAreaEdge : int32
+	{
+		AreaEdgeLeft = 1,
+		AreaEdgeRight = 2,
+		AreaEdgeTop = 4,
+		AreaEdgeBottom = 8,
+	};
+	/** How close (screen pixels) the mouse must be to an edge of the selected area to grab it. */
+	constexpr float AreaEdgeGrab = 7.f;
+
 	FName ObjectLayerOf(int32 LayerItem)
 	{
 		switch (LayerItem)
@@ -92,6 +103,14 @@ namespace
 
 	FText BrushKind(const FOnyxPainterBrush& Brush)
 	{
+		if (Brush.bProject)
+		{
+			return INVTEXT("Character");
+		}
+		if (Brush.IsArea())
+		{
+			return INVTEXT("Area · drag it out");
+		}
 		if (!Brush.bCustom)
 		{
 			return INVTEXT("Gameplay");
@@ -510,7 +529,7 @@ TSharedRef<ITableRow> SOnyxPainterTool::GenerateBrushRow(TSharedPtr<FOnyxPainter
 			[
 				SNew(SBox).WidthOverride(28.f).HeightOverride(28.f).HAlign(HAlign_Center).VAlign(VAlign_Center)
 				[
-					SNew(SImage).Image(GetBrushThumbnail(Item))
+					SNew(SImage).Image_Lambda([this, Item]() { return GetBrushThumbnail(Item); })
 				]
 			]
 			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
@@ -528,7 +547,7 @@ TSharedRef<ITableRow> SOnyxPainterTool::GenerateBrushRow(TSharedPtr<FOnyxPainter
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 			[
 				SNew(SBox)
-				.Visibility(Item->bCustom ? EVisibility::Visible : EVisibility::Collapsed)
+				.Visibility(Item->bCustom && !Item->bProject ? EVisibility::Visible : EVisibility::Collapsed)
 				[
 					IconButton("Icons.Delete", INVTEXT("Remove from the palette (placed objects stay)"), [Id]() { FOnyxBrushLibrary::Get().Remove(Id); })
 				]
@@ -654,7 +673,8 @@ TSharedRef<SWidget> SOnyxPainterTool::MakeCanvasArea()
 		.PreviewRect(this, &SOnyxPainterTool::GetPreviewRect)
 		.SelectedActor_Lambda([this]() { return SelectedActor; })
 		.OnStroke(this, &SOnyxPainterTool::HandleStroke)
-		.OnKey(this, &SOnyxPainterTool::HandleKey);
+		.OnKey(this, &SOnyxPainterTool::HandleKey)
+		.OnQueryCursor(this, &SOnyxPainterTool::GetCursorFor);
 
 	return SNew(SOverlay)
 		+ SOverlay::Slot()
@@ -1097,14 +1117,122 @@ void SOnyxPainterTool::ApplyAt(const FIntPoint& Cell, bool bErase)
 		}
 		Painter.EraseObject(Cell, ActiveObjectLayer);
 	}
-	else if (SelectedBrush.IsValid())
+	else if (SelectedBrush.IsValid() && !SelectedBrush->IsArea())
 	{
 		Painter.PlaceObject(Cell, *SelectedBrush, ActiveObjectLayer);
 	}
 }
 
+void SOnyxPainterTool::PlaceArea(const FIntRect& Cells)
+{
+	if (!SelectedBrush.IsValid() || !SelectedBrush->IsArea())
+	{
+		return;
+	}
+	if (!Painter.FindMapActor())
+	{
+		Notify(INVTEXT("Place the tile map in the level first (banner at the top of the canvas)."), false);
+		return;
+	}
+	const FIntPoint MapMax = Painter.GetMapSize() - FIntPoint(1, 1);
+	const FIntRect Clamped(Cells.Min.ComponentMax(FIntPoint::ZeroValue), Cells.Max.ComponentMin(MapMax));
+	const FScopedTransaction Transaction(FText::Format(INVTEXT("Add {0}"), SelectedBrush->Label));
+	if (AActor* Actor = Painter.PlaceArea(Clamped, *SelectedBrush, ActiveObjectLayer))
+	{
+		// Straight to Select, so the handles work: resize by the edges, move by the inside.
+		SetTool(EOnyxPaintTool::Select);
+		SelectActor(Actor);
+		Notify(FText::Format(INVTEXT("{0} added: drag its edges to resize it, or the inside to move it"), SelectedBrush->Label), true);
+	}
+}
+
+int32 SOnyxPainterTool::GetAreaEdgesAt(const FVector2D& MapPixels) const
+{
+	const TSharedPtr<FOnyxPainterBrush> Brush = FOnyxBrushLibrary::Get().FindFor(SelectedActor.Get());
+	if (!Brush.IsValid() || !Brush->IsArea() || !Canvas.IsValid())
+	{
+		return 0;
+	}
+	const FBox Area = Brush->GetArea(SelectedActor.Get());
+	const FVector2D Min = Painter.WorldToMapPixels(FVector(Area.Min.X, 0.f, Area.Max.Z));
+	const FVector2D Max = Painter.WorldToMapPixels(FVector(Area.Max.X, 0.f, Area.Min.Z));
+	const double Reach = AreaEdgeGrab / FMath::Max(Canvas->GetZoom(), 0.01f);
+	if (MapPixels.X < Min.X - Reach || MapPixels.X > Max.X + Reach || MapPixels.Y < Min.Y - Reach || MapPixels.Y > Max.Y + Reach)
+	{
+		return 0;
+	}
+	int32 Edges = 0;
+	Edges |= FMath::Abs(MapPixels.X - Min.X) <= Reach ? AreaEdgeLeft : (FMath::Abs(MapPixels.X - Max.X) <= Reach ? AreaEdgeRight : 0);
+	Edges |= FMath::Abs(MapPixels.Y - Min.Y) <= Reach ? AreaEdgeTop : (FMath::Abs(MapPixels.Y - Max.Y) <= Reach ? AreaEdgeBottom : 0);
+	return Edges;
+}
+
+FIntRect SOnyxPainterTool::GetDraggedArea(const FIntPoint& Cell) const
+{
+	const FIntPoint Delta = Cell - GrabStartCell;
+	FIntRect Area = GrabStartArea;
+	if (bMovingArea)
+	{
+		Area.Min += Delta;
+		Area.Max += Delta;
+		return Area;
+	}
+	// Each grabbed edge follows the mouse; the area never gets smaller than one cell.
+	if (GrabbedEdges & AreaEdgeLeft)
+	{
+		Area.Min.X = FMath::Min(GrabStartArea.Min.X + Delta.X, Area.Max.X);
+	}
+	if (GrabbedEdges & AreaEdgeRight)
+	{
+		Area.Max.X = FMath::Max(GrabStartArea.Max.X + Delta.X, Area.Min.X);
+	}
+	if (GrabbedEdges & AreaEdgeTop)
+	{
+		Area.Min.Y = FMath::Min(GrabStartArea.Min.Y + Delta.Y, Area.Max.Y);
+	}
+	if (GrabbedEdges & AreaEdgeBottom)
+	{
+		Area.Max.Y = FMath::Max(GrabStartArea.Max.Y + Delta.Y, Area.Min.Y);
+	}
+	return Area;
+}
+
+TOptional<EMouseCursor::Type> SOnyxPainterTool::GetCursorFor(FVector2D MapPixels) const
+{
+	if (Tool != EOnyxPaintTool::Select)
+	{
+		return {};
+	}
+	const int32 Edges = bMovingArea || GrabbedEdges != 0 ? GrabbedEdges : GetAreaEdgesAt(MapPixels);
+	if (bMovingArea)
+	{
+		return EMouseCursor::CardinalCross;
+	}
+	const bool bHorizontal = (Edges & (AreaEdgeLeft | AreaEdgeRight)) != 0;
+	const bool bVertical = (Edges & (AreaEdgeTop | AreaEdgeBottom)) != 0;
+	if (bHorizontal && bVertical)
+	{
+		const bool bFalling = ((Edges & AreaEdgeLeft) != 0) == ((Edges & AreaEdgeTop) != 0); // top-left or bottom-right corner
+		return bFalling ? EMouseCursor::ResizeSouthEast : EMouseCursor::ResizeSouthWest;
+	}
+	if (bHorizontal)
+	{
+		return EMouseCursor::ResizeLeftRight;
+	}
+	if (bVertical)
+	{
+		return EMouseCursor::ResizeUpDown;
+	}
+	return {};
+}
+
 void SOnyxPainterTool::ApplyRect(const FIntRect& Rect, bool bErase)
 {
+	if (IsObjectLayer() && !bErase && SelectedBrush.IsValid() && SelectedBrush->IsArea())
+	{
+		PlaceArea(Rect); // one object over the whole rectangle, not one per cell
+		return;
+	}
 	Painter.BeginStroke(bErase ? INVTEXT("Clear Rectangle") : INVTEXT("Fill Rectangle"));
 	for (int32 Y = Rect.Min.Y; Y <= Rect.Max.Y; ++Y)
 	{
@@ -1131,27 +1259,68 @@ void SOnyxPainterTool::HandleStroke(EOnyxStrokePhase Phase, FIntPoint Cell, bool
 		return;
 	}
 
-	// Select: click an object, drag it to another cell.
+	// Select: click an object, drag it to another cell. Area objects (water) also resize by their edges.
 	if (Tool == EOnyxPaintTool::Select && !bSecondary)
 	{
 		if (Phase == EOnyxStrokePhase::Begin)
 		{
+			GrabStartCell = Cell;
+			GrabbedEdges = GetAreaEdgesAt(Canvas->GetHoverMapPixels());
+			if (GrabbedEdges != 0 && Painter.GetAreaCells(SelectedActor.Get(), GrabStartArea))
+			{
+				Painter.BeginStroke(INVTEXT("Resize Area"));
+				return;
+			}
+			GrabbedEdges = 0;
 			AActor* Actor = FindObjectForSelection(Cell);
 			SelectActor(Actor);
+			if (Actor && Painter.GetAreaCells(Actor, GrabStartArea))
+			{
+				bMovingArea = true;
+				Painter.BeginStroke(INVTEXT("Move Area"));
+				return;
+			}
 			bDraggingActor = Actor != nullptr;
 			if (bDraggingActor)
 			{
 				Painter.BeginStroke(INVTEXT("Move Object"));
 			}
 		}
+		else if (Phase == EOnyxStrokePhase::Move && (bMovingArea || GrabbedEdges != 0))
+		{
+			Painter.SetAreaCells(SelectedActor.Get(), GetDraggedArea(Cell));
+		}
 		else if (Phase == EOnyxStrokePhase::Move && bDraggingActor)
 		{
 			Painter.MoveObject(SelectedActor.Get(), Cell);
 		}
-		else if (Phase == EOnyxStrokePhase::End && bDraggingActor)
+		else if (Phase == EOnyxStrokePhase::End && (bDraggingActor || bMovingArea || GrabbedEdges != 0))
 		{
 			bDraggingActor = false;
+			bMovingArea = false;
+			GrabbedEdges = 0;
 			Painter.EndStroke();
+		}
+		return;
+	}
+
+	// Area brushes (water): drag out the block it fills; a click gives the default size.
+	if (IsObjectLayer() && Tool == EOnyxPaintTool::Brush && SelectedBrush.IsValid() && SelectedBrush->IsArea() && !bSecondary)
+	{
+		if (Phase == EOnyxStrokePhase::Begin)
+		{
+			RectStart = Cell;
+		}
+		RectEnd = Cell;
+		if (Phase == EOnyxStrokePhase::End && RectStart.IsSet())
+		{
+			FIntRect Cells(RectStart->ComponentMin(RectEnd), RectStart->ComponentMax(RectEnd));
+			if (Cells.Min == Cells.Max)
+			{
+				Cells.Max = Cells.Min + SelectedBrush->DefaultAreaCells - FIntPoint(1, 1);
+			}
+			RectStart.Reset();
+			PlaceArea(Cells);
 		}
 		return;
 	}
@@ -1513,11 +1682,11 @@ const FSlateBrush* SOnyxPainterTool::GetBrushThumbnail(const TSharedPtr<FOnyxPai
 	const FOnyxBrushLibrary& Library = FOnyxBrushLibrary::Get();
 	UTexture2D* Texture = nullptr;
 	FIntRect Rect;
-	if (!Library.GetPreviewSprite(*Brush, Texture, Rect))
+	if (!Library.GetPreviewSprite(*Brush, Texture, Rect, FPlatformTime::Seconds()))
 	{
 		return Library.GetIcon(*Brush);
 	}
-	// Sprite / flipbook brushes show their first frame.
+	// The sprite it shows, animated (flipbooks, characters' Idle clip).
 	TSharedRef<FSlateBrush>& Thumbnail = Thumbnails.FindOrAdd(Brush->Id, MakeShared<FSlateBrush>());
 	const FIntPoint TextureSize = Texture->GetImportedSize();
 	const float Scale = 28.f / FMath::Max(Rect.Width(), Rect.Height());

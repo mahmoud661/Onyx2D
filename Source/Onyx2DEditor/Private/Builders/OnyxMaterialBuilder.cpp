@@ -24,6 +24,7 @@
 #include "Materials/MaterialExpressionSceneTexture.h"
 #include "Materials/MaterialExpressionScreenPosition.h"
 #include "Materials/MaterialExpressionSubtract.h"
+#include "Materials/MaterialExpressionTime.h"
 #include "Materials/MaterialExpressionTextureCoordinate.h"
 #include "Materials/MaterialExpressionTextureObjectParameter.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
@@ -37,7 +38,7 @@ const TCHAR* FOnyxMaterialBuilder::Folder = TEXT("/Onyx2D/Materials");
 namespace
 {
 	const TCHAR* MaterialNames[] = { TEXT("M_OnyxSolid"), TEXT("M_OnyxBackground"), TEXT("M_OnyxGlow"), TEXT("M_OnyxLitSprite"),
-		TEXT("M_OnyxLightHalo"), TEXT("PP_OnyxLight2D") };
+		TEXT("M_OnyxLightHalo"), TEXT("PP_OnyxLight2D"), TEXT("M_OnyxWater"), TEXT("M_OnyxWaterDrop") };
 	const TCHAR* CollectionName = TEXT("MPC_OnyxLighting");
 	const TCHAR* PlaceholderName = TEXT("RT_OnyxLightPlaceholder");
 
@@ -84,6 +85,62 @@ float3 lit = Ambient.rgb + SunColor.rgb * sunTerm + light * lightTerm;
 return Scene.rgb + Base.rgb * lit;
 )HLSL");
 
+	/**
+	 * Onyx Water: UV.x = world X in metres, UV.y = cm under the surface (negative just above it). Smooth gradient with depth,
+	 * drifting caustics and light shafts near the top, rising bubbles, and a crisp surface line with a glow under it.
+	 * The surface edge is anti-aliased in the shader (fwidth), so it stays smooth without TAA.
+	 */
+	const TCHAR* WaterHLSL = TEXT(R"HLSL(
+float d = UV.y;
+float aa = max(fwidth(d), 0.0001) * 1.5;
+float inside = saturate(d / aa + 0.5);
+float depth01 = saturate(d / max(Depth, 1.0));
+float3 col = lerp(Shallow.rgb, Deep.rgb, sqrt(depth01));
+float alpha = lerp(Shallow.a, Deep.a, depth01);
+float t = Time;
+
+// Caustics: one soft, slowly warping net of light about a metre across, only near the top.
+float2 p = float2(UV.x * 1.1, d * 0.011);
+p += 0.25 * float2(sin(p.y * 4.0 + t * 0.8), sin(p.x * 3.3 - t * 0.6));
+float wa = sin(p.x * 6.2831 + t * 0.5);
+float wb = sin(p.y * 5.6548 - t * 0.35 + wa * 0.8);
+float caustic = pow(saturate(1.0 - abs(wa + wb) * 0.5), 6.0);
+col += Surface.rgb * caustic * Caustics * 0.55 * exp(-max(d, 0.0) / 70.0);
+
+// Light shafts falling from the surface.
+float shaft = pow(saturate(0.5 + 0.5 * sin(UV.x * 1.3 + t * 0.12) * sin(UV.x * 0.47 - t * 0.05)), 5.0);
+col += Surface.rgb * shaft * 0.16 * Caustics * exp(-max(d, 0.0) / 150.0);
+
+// A few bubbles rising: thin bright rings with a highlight, between the bottom and just under the surface.
+float2 bp = float2(UV.x * 1.6, d * 0.022 + t * 0.18);
+float2 cell = floor(bp);
+float h = frac(sin(dot(cell, float2(127.1, 311.7))) * 43758.5453);
+float2 o = float2(frac(h * 3.7), frac(h * 17.13)) * 0.5 + 0.25;
+float r = 0.07 + 0.08 * frac(h * 7.7);
+float dist = length((frac(bp) - o) * float2(1.0, 0.8));
+float w = max(length(fwidth(bp)), 0.002) * 0.7; // from the continuous coordinates: no seams at cell edges
+float ring = saturate(1.0 - abs(dist - r) / w) + 0.6 * saturate(1.0 - length(frac(bp) - o + r * 0.45) / (r * 0.35));
+float bub = saturate(ring) * step(0.9, h) * saturate((d - 15.0) / 30.0) * saturate((Depth - d) / 30.0) * Bubbles;
+col = lerp(col, Surface.rgb, bub * 0.6);
+alpha = max(alpha, bub * 0.55);
+
+float lineMask = saturate(1.0 - abs(d - Thickness * 0.5) / (Thickness * 0.5 + aa));
+float glow = exp(-max(d, 0.0) / 12.0) * 0.4;
+col = lerp(col, Surface.rgb, saturate(lineMask + glow * (1.0 - lineMask)) * Surface.a);
+alpha = max(alpha, lineMask * Surface.a);
+
+alpha *= inside;
+return float4(col * Tint.rgb, alpha);
+)HLSL");
+
+	/** Splash droplets: round, soft-edged dots in their vertex colour. */
+	const TCHAR* DropHLSL = TEXT(R"HLSL(
+float r = length(UV - 0.5) * 2.0;
+float edge = max(fwidth(r), 0.001);
+float a = saturate((1.0 - r) / edge);
+return float4(ColorRGB * Tint.rgb, ColorA * a);
+)HLSL");
+
 	/** Small graph-building helper over UMaterialEditingLibrary. */
 	struct FGraph
 	{
@@ -114,6 +171,18 @@ return Scene.rgb + Base.rgb * lit;
 		void Link(UMaterialExpression* From, const FString& Output, UMaterialExpression* To, const FString& Input) const
 		{
 			UMaterialEditingLibrary::ConnectMaterialExpressions(From, Output, To, Input);
+		}
+
+		/** Some channels of From. Every channel is set: a new mask doesn't start with all of them off (R is on). */
+		UMaterialExpressionComponentMask* Mask(UMaterialExpression* From, bool bR, bool bG, bool bB, bool bA, int32 X, int32 Y)
+		{
+			UMaterialExpressionComponentMask* Node = Add<UMaterialExpressionComponentMask>(X, Y);
+			Node->R = bR;
+			Node->G = bG;
+			Node->B = bB;
+			Node->A = bA;
+			Link(From, FString(), Node, FString());
+			return Node;
 		}
 
 		void Out(UMaterialExpression* From, const FString& Output, EMaterialProperty Property) const
@@ -248,9 +317,7 @@ return Scene.rgb + Base.rgb * lit;
 		{
 			Mood->ParameterId = Collection->VectorParameters[0].Id;
 		}
-		UMaterialExpressionComponentMask* MoodRGB = Graph.Add<UMaterialExpressionComponentMask>(-150, 250);
-		MoodRGB->R = MoodRGB->G = MoodRGB->B = true;
-		Graph.Link(Mood, FString(), MoodRGB, FString());
+		UMaterialExpressionComponentMask* MoodRGB = Graph.Mask(Mood, true, true, true, false, -150, 250);
 		UMaterialExpressionMultiply* Tinted = Graph.Add<UMaterialExpressionMultiply>(-100, 50);
 		Graph.Link(Color, FString(), Tinted, TEXT("A"));
 		Graph.Link(MoodRGB, FString(), Tinted, TEXT("B"));
@@ -273,6 +340,89 @@ return Scene.rgb + Base.rgb * lit;
 		Graph.Link(Graph.Vector(TEXT("Color"), FLinearColor(1.f, 0.75f, 0.15f), -500, -50), FString(), Glow, TEXT("A"));
 		Graph.Link(Graph.Scalar(TEXT("Intensity"), 1.5f, -500, 150), FString(), Glow, TEXT("B"));
 		Graph.Out(Glow, FString(), MP_EmissiveColor);
+		FinishMaterial(Material, Built);
+	}
+
+	/** True when a plugin material exists but predates a parameter (rebuild it). */
+	bool IsOutdated(const TCHAR* Name, FName Parameter)
+	{
+		const UMaterial* Existing = LoadPluginAsset<UMaterial>(Name);
+		float Value = 0.f;
+		return Existing && !Existing->GetScalarParameterDefaultValue(FHashedMaterialParameterInfo(Parameter), Value);
+	}
+
+	/** Unlit translucent, drawn after the 2D lighting composite (which runs before depth of field) so it is not lit twice. */
+	void SetupWaterSurface(UMaterial* Material)
+	{
+		Material->SetShadingModel(MSM_Unlit);
+		Material->BlendMode = BLEND_Translucent;
+		Material->TwoSided = true;
+		Material->TranslucencyPass = MTP_AfterDOF;
+	}
+
+	UMaterialExpressionCustom* AddCustom(FGraph& Graph, const TCHAR* Code, const TCHAR* Description, std::initializer_list<const TCHAR*> Inputs)
+	{
+		UMaterialExpressionCustom* Custom = Graph.Add<UMaterialExpressionCustom>(-500, 0);
+		Custom->Code = Code;
+		Custom->OutputType = CMOT_Float4;
+		Custom->Description = Description;
+		Custom->Inputs.Reset();
+		for (const TCHAR* InputName : Inputs)
+		{
+			Custom->Inputs.AddDefaulted_GetRef().InputName = InputName;
+		}
+		Custom->PostEditChange();
+		return Custom;
+	}
+
+	void OutputColorAndOpacity(FGraph& Graph, UMaterialExpressionCustom* Custom)
+	{
+		Graph.Out(Graph.Mask(Custom, true, true, true, false, -250, -50), FString(), MP_EmissiveColor);
+		Graph.Out(Graph.Mask(Custom, false, false, false, true, -250, 100), FString(), MP_Opacity);
+	}
+
+	void BuildWater(bool bRebuild, TArray<FString>& Built)
+	{
+		UMaterial* Material = BeginMaterial(TEXT("M_OnyxWater"), bRebuild || IsOutdated(TEXT("M_OnyxWater"), TEXT("WaterVersion5")));
+		if (!Material)
+		{
+			return;
+		}
+		SetupWaterSurface(Material);
+		FGraph Graph{ Material };
+		UMaterialExpressionCustom* Custom = AddCustom(Graph, WaterHLSL, TEXT("Onyx Water"),
+			{ TEXT("UV"), TEXT("Time"), TEXT("Shallow"), TEXT("Deep"), TEXT("Surface"), TEXT("Depth"), TEXT("Thickness"), TEXT("Caustics"), TEXT("Bubbles"), TEXT("Tint"), TEXT("Version") });
+		Graph.Link(Graph.Add<UMaterialExpressionTextureCoordinate>(-900, -400), FString(), Custom, TEXT("UV"));
+		Graph.Link(Graph.Add<UMaterialExpressionTime>(-900, -300), FString(), Custom, TEXT("Time"));
+		Graph.Link(Graph.Vector(TEXT("ShallowColor"), FLinearColor(0.12f, 0.6f, 0.86f, 0.5f), -900, -200), TEXT("RGBA"), Custom, TEXT("Shallow"));
+		Graph.Link(Graph.Vector(TEXT("DeepColor"), FLinearColor(0.02f, 0.14f, 0.4f, 0.88f), -900, -50), TEXT("RGBA"), Custom, TEXT("Deep"));
+		Graph.Link(Graph.Vector(TEXT("SurfaceColor"), FLinearColor(0.85f, 0.97f, 1.f, 1.f), -900, 100), TEXT("RGBA"), Custom, TEXT("Surface"));
+		Graph.Link(Graph.Scalar(TEXT("Depth"), 300.f, -900, 250), FString(), Custom, TEXT("Depth"));
+		Graph.Link(Graph.Scalar(TEXT("Thickness"), 3.f, -900, 350), FString(), Custom, TEXT("Thickness"));
+		Graph.Link(Graph.Scalar(TEXT("Caustics"), 0.6f, -900, 450), FString(), Custom, TEXT("Caustics"));
+		Graph.Link(Graph.Scalar(TEXT("Bubbles"), 1.f, -900, 550), FString(), Custom, TEXT("Bubbles"));
+		Graph.Link(Graph.Vector(TEXT("Tint"), FLinearColor::White, -900, 650), FString(), Custom, TEXT("Tint"));
+		Graph.Link(Graph.Scalar(TEXT("WaterVersion5"), 1.f, -900, 800), FString(), Custom, TEXT("Version")); // marks this version (older ones are rebuilt)
+		OutputColorAndOpacity(Graph, Custom);
+		FinishMaterial(Material, Built);
+	}
+
+	void BuildWaterDrop(bool bRebuild, TArray<FString>& Built)
+	{
+		UMaterial* Material = BeginMaterial(TEXT("M_OnyxWaterDrop"), bRebuild);
+		if (!Material)
+		{
+			return;
+		}
+		SetupWaterSurface(Material);
+		FGraph Graph{ Material };
+		UMaterialExpressionCustom* Custom = AddCustom(Graph, DropHLSL, TEXT("Onyx Water Drop"), { TEXT("UV"), TEXT("ColorRGB"), TEXT("ColorA"), TEXT("Tint") });
+		Graph.Link(Graph.Add<UMaterialExpressionTextureCoordinate>(-900, -200), FString(), Custom, TEXT("UV"));
+		UMaterialExpressionVertexColor* Vertex = Graph.Add<UMaterialExpressionVertexColor>(-900, -50);
+		Graph.Link(Vertex, FString(), Custom, TEXT("ColorRGB"));
+		Graph.Link(Vertex, TEXT("A"), Custom, TEXT("ColorA"));
+		Graph.Link(Graph.Vector(TEXT("Tint"), FLinearColor::White, -900, 150), FString(), Custom, TEXT("Tint"));
+		OutputColorAndOpacity(Graph, Custom);
 		FinishMaterial(Material, Built);
 	}
 
@@ -394,12 +544,8 @@ return Scene.rgb + Base.rgb * lit;
 
 		UMaterialExpressionScreenPosition* Screen = Graph.Add<UMaterialExpressionScreenPosition>(-1400, 0);
 		UMaterialExpressionViewSize* ViewSize = Graph.Add<UMaterialExpressionViewSize>(-1400, 900);
-		UMaterialExpressionComponentMask* MaskX = Graph.Add<UMaterialExpressionComponentMask>(-1250, 850);
-		MaskX->R = true;
-		UMaterialExpressionComponentMask* MaskY = Graph.Add<UMaterialExpressionComponentMask>(-1250, 950);
-		MaskY->G = true;
-		Graph.Link(ViewSize, FString(), MaskX, FString());
-		Graph.Link(ViewSize, FString(), MaskY, FString());
+		UMaterialExpressionComponentMask* MaskX = Graph.Mask(ViewSize, true, false, false, false, -1250, 850);
+		UMaterialExpressionComponentMask* MaskY = Graph.Mask(ViewSize, false, true, false, false, -1250, 950);
 		UMaterialExpressionDivide* Aspect = Graph.Add<UMaterialExpressionDivide>(-1100, 900);
 		Graph.Link(MaskX, FString(), Aspect, TEXT("A"));
 		Graph.Link(MaskY, FString(), Aspect, TEXT("B"));
@@ -455,6 +601,8 @@ TArray<FString> FOnyxMaterialBuilder::EnsureMaterials(bool bRebuild)
 	BuildBackground(bRebuild, Collection, Built);
 	BuildGlow(bRebuild, Built);
 	BuildLitSprite(bRebuild, Built);
+	BuildWater(bRebuild, Built);
+	BuildWaterDrop(bRebuild, Built);
 	BuildLightHalo(bRebuild, Built);
 	BuildComposite(bRebuild, Placeholder, Built);
 	return Built;

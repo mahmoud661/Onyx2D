@@ -2,6 +2,10 @@
 
 #include "Level/OnyxBrushLibrary.h"
 #include "AssetRegistry/AssetData.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Containers/Ticker.h"
+#include "Level/OnyxActorPreview.h"
+#include "Misc/PackageName.h"
 #include "Camera/OnyxCameraBounds.h"
 #include "AI/OnyxPatrolComponent.h"
 #include "Character/OnyxBehaviourLibrary.h"
@@ -31,7 +35,9 @@
 #include "World/OnyxLevelExit.h"
 #include "World/OnyxMovingPlatform.h"
 #include "World/OnyxOneWayPlatform.h"
+#include "World/OnyxPhysicsProp.h"
 #include "World/OnyxPickup.h"
+#include "World/OnyxWater.h"
 
 const FName FOnyxBrushLibrary::EntitiesLayer(TEXT("Entities"));
 const FName FOnyxBrushLibrary::DecorLayer(TEXT("Decor"));
@@ -87,6 +93,37 @@ namespace
 		return Brush;
 	}
 
+	/** Water you drag out over cells: its surface is the top of the area. */
+	TSharedRef<FOnyxPainterBrush> MakeWater()
+	{
+		TSharedRef<FOnyxPainterBrush> Brush = MakeBuiltin<AOnyxWater>(TEXT("Water"), INVTEXT("Water"), FLinearColor(0.25f, 0.6f, 1.f));
+		Brush->GetArea = [](const AActor* Actor)
+		{
+			const AOnyxWater* Water = CastChecked<AOnyxWater>(Actor);
+			const FVector Surface = Water->GetActorLocation();
+			return FBox(FVector(Surface.X - Water->Size.X * 0.5f, Surface.Y, Surface.Z - Water->Size.Y), FVector(Surface.X + Water->Size.X * 0.5f, Surface.Y, Surface.Z));
+		};
+		Brush->SetArea = [](AActor* Actor, const FBox& Area)
+		{
+			AOnyxWater* Water = CastChecked<AOnyxWater>(Actor);
+			Water->Modify();
+			Water->Size = FVector2D(Area.Max.X - Area.Min.X, Area.Max.Z - Area.Min.Z);
+			Water->SetActorLocation(FVector(Area.GetCenter().X, Water->GetActorLocation().Y, Area.Max.Z));
+			Water->RerunConstructionScripts();
+		};
+		Brush->GetAreaLook = [](const AActor* Actor)
+		{
+			const AOnyxWater* Water = CastChecked<AOnyxWater>(Actor);
+			FOnyxAreaLook Look;
+			Look.Top = Water->ShallowColor;
+			Look.Bottom = Water->DeepColor;
+			Look.Edge = Water->SurfaceColor;
+			Look.bWavyEdge = Water->bWaves;
+			return Look;
+		};
+		return Brush;
+	}
+
 	const UPaperSprite* PreviewSpriteOf(const UObject* Asset)
 	{
 		if (const UPaperSprite* Sprite = Cast<UPaperSprite>(Asset))
@@ -107,11 +144,78 @@ FOnyxBrushLibrary& FOnyxBrushLibrary::Get()
 FOnyxBrushLibrary::FOnyxBrushLibrary()
 {
 	Rebuild();
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+	Registry.OnAssetAdded().AddRaw(this, &FOnyxBrushLibrary::OnAssetsChanged);
+	Registry.OnAssetRemoved().AddRaw(this, &FOnyxBrushLibrary::OnAssetsChanged);
+	Registry.OnAssetRenamed().AddLambda([this](const FAssetData& Asset, const FString&) { OnAssetsChanged(Asset); });
+}
+
+FOnyxBrushLibrary::~FOnyxBrushLibrary()
+{
+	if (FAssetRegistryModule* Module = FModuleManager::GetModulePtr<FAssetRegistryModule>("AssetRegistry"))
+	{
+		IAssetRegistry& Registry = Module->Get();
+		Registry.OnAssetAdded().RemoveAll(this);
+		Registry.OnAssetRemoved().RemoveAll(this);
+		Registry.OnAssetRenamed().RemoveAll(this);
+	}
+}
+
+void FOnyxBrushLibrary::OnAssetsChanged(const FAssetData& Asset)
+{
+	if (bRebuildQueued || !Asset.AssetClassPath.GetAssetName().ToString().Contains(TEXT("Blueprint")))
+	{
+		return;
+	}
+	bRebuildQueued = true;
+	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this](float)
+	{
+		bRebuildQueued = false;
+		Rebuild();
+		return false;
+	}));
+}
+
+void FOnyxBrushLibrary::AddProjectCharacters()
+{
+	// Every character Blueprint in the project is a brush: paint your hero and your foes straight away.
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+	FARFilter Filter;
+	Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
+	Filter.PackagePaths.Add(TEXT("/Game"));
+	Filter.bRecursivePaths = true;
+	TArray<FAssetData> Blueprints;
+	Registry.GetAssets(Filter, Blueprints);
+	const TArray<FSoftObjectPath>& Custom = GetDefault<UOnyxPainterSettings>()->CustomBrushes;
+	for (const FAssetData& Asset : Blueprints)
+	{
+		FString ParentPath;
+		Asset.GetTagValue(FBlueprintTags::NativeParentClassPath, ParentPath);
+		const UClass* Parent = FSoftClassPath(FPackageName::ExportTextPathToObjectPath(ParentPath)).ResolveClass();
+		if (!Parent || !Parent->IsChildOf(AOnyxCharacter::StaticClass()) || Custom.Contains(Asset.GetSoftObjectPath()))
+		{
+			continue;
+		}
+		if (TSharedPtr<FOnyxPainterBrush> Brush = MakeCustomBrush(Asset.GetSoftObjectPath()))
+		{
+			FString Label = Asset.AssetName.ToString();
+			Label.RemoveFromStart(TEXT("BP_"));
+			Brush->Label = FText::FromString(Label);
+			Brush->bProject = true;
+			Brush->Color = FLinearColor(0.5f, 0.47f, 0.87f);
+			UClass* Class = Brush->Class;
+			Brush->Matches = [Class](const AActor* Actor) { return Actor->GetClass() == Class; };
+			Brushes.Add(Brush.ToSharedRef());
+		}
+	}
 }
 
 void FOnyxBrushLibrary::Rebuild()
 {
-	Brushes = {
+	// The project's characters first: they match their placed actors before the generic built-ins do.
+	Brushes.Reset();
+	AddProjectCharacters();
+	Brushes.Append(TArray<TSharedRef<FOnyxPainterBrush>>{
 		MakeBuiltin<APlayerStart>(TEXT("PlayerStart"), INVTEXT("Player Start"), FLinearColor(0.22f, 0.71f, 1.f), true),
 		MakePatrollingFoe(),
 		MakePickup(TEXT("Coin"), INVTEXT("Coin"), EOnyxPickupType::Coin, FLinearColor(1.f, 0.76f, 0.2f)),
@@ -121,9 +225,11 @@ void FOnyxBrushLibrary::Rebuild()
 		MakeBuiltin<AOnyxMovingPlatform>(TEXT("MovingPlatform"), INVTEXT("Moving Platform"), FLinearColor(0.75f, 0.78f, 0.85f)),
 		MakeBuiltin<AOnyxOneWayPlatform>(TEXT("OneWay"), INVTEXT("One-Way Platform"), FLinearColor(0.5f, 0.75f, 0.95f)),
 		MakeBuiltin<AOnyxHazardVolume>(TEXT("Hazard"), INVTEXT("Hazard"), FLinearColor(1.f, 0.4f, 0.2f)),
+		MakeWater(),
+		MakeBuiltin<AOnyxPhysicsProp>(TEXT("PhysicsProp"), INVTEXT("Physics Prop"), FLinearColor(0.8f, 0.58f, 0.35f), true),
 		MakeBuiltin<AOnyxLight2D>(TEXT("Light"), INVTEXT("2D Light"), FLinearColor(1.f, 0.9f, 0.45f)),
 		MakeBuiltin<AOnyxLightSwitch>(TEXT("LightSwitch"), INVTEXT("Light Switch"), FLinearColor(1.f, 0.82f, 0.3f), true),
-	};
+	});
 	for (const FSoftObjectPath& Path : GetDefault<UOnyxPainterSettings>()->CustomBrushes)
 	{
 		if (TSharedPtr<FOnyxPainterBrush> Brush = MakeCustomBrush(Path))
@@ -306,16 +412,25 @@ const FSlateBrush* FOnyxBrushLibrary::GetIcon(const FOnyxPainterBrush& Brush) co
 	return FSlateIconFinder::FindIconBrushForClass(Brush.Class, "ClassIcon.Actor");
 }
 
-bool FOnyxBrushLibrary::GetPreviewSprite(const FOnyxPainterBrush& Brush, UTexture2D*& OutTexture, FIntRect& OutRect) const
+bool FOnyxBrushLibrary::GetPreviewSprite(const FOnyxPainterBrush& Brush, UTexture2D*& OutTexture, FIntRect& OutRect, double Time) const
 {
-	const UPaperSprite* Sprite = Brush.bCustom ? PreviewSpriteOf(Brush.Asset.ResolveObject()) : nullptr;
-	OutTexture = Sprite ? Sprite->GetSourceTexture() : nullptr;
-	if (!OutTexture)
+	const UObject* Asset = Brush.bCustom ? Brush.Asset.ResolveObject() : nullptr;
+	const UPaperSprite* Sprite = Cast<UPaperSprite>(Asset);
+	if (const UPaperFlipbook* Flipbook = Cast<UPaperFlipbook>(Asset); Flipbook && Flipbook->GetNumKeyFrames() > 0)
 	{
+		const float Duration = Flipbook->GetTotalDuration();
+		Sprite = Flipbook->GetSpriteAtTime(Duration > 0.f ? float(FMath::Fmod(Time, double(Duration))) : 0.f);
+	}
+	FOnyxSpriteDraw Draw;
+	const bool bHasDraw = Sprite ? OnyxActorPreview::MakeDraw(Sprite, FTransform::Identity, Draw) : OnyxActorPreview::GetClassSprite(Brush.Class, Time, Draw);
+	if (!bHasDraw || !Draw.Texture)
+	{
+		OutTexture = nullptr;
 		return false;
 	}
-	const FIntPoint Min(FMath::RoundToInt(Sprite->GetSourceUV().X), FMath::RoundToInt(Sprite->GetSourceUV().Y));
-	const FIntPoint Size(FMath::RoundToInt(Sprite->GetSourceSize().X), FMath::RoundToInt(Sprite->GetSourceSize().Y));
-	OutRect = FIntRect(Min, Min + Size);
-	return Size.X > 0 && Size.Y > 0;
+	OutTexture = Draw.Texture;
+	const FVector2f TextureSize(Draw.Texture->GetSurfaceWidth(), Draw.Texture->GetSurfaceHeight());
+	const FIntPoint Min(FMath::RoundToInt(Draw.UV.Min.X * TextureSize.X), FMath::RoundToInt(Draw.UV.Min.Y * TextureSize.Y));
+	OutRect = FIntRect(Min, Min + Draw.Pixels);
+	return Draw.Pixels.X > 0 && Draw.Pixels.Y > 0;
 }

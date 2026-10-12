@@ -3,6 +3,7 @@
 #include "Commandlets/OnyxExamplesCommandlet.h"
 #include "Builders/OnyxMaterialBuilder.h"
 #include "Examples/OnyxSunnyLandExample.h"
+#include "Examples/OnyxWaterExample.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOnyxExamples, Log, All);
 
@@ -31,5 +32,11 @@ int32 UOnyxExamplesCommandlet::Main(const FString& Params)
 		return 1;
 	}
 	UE_LOG(LogOnyxExamples, Display, TEXT("Sunny Land built: %s"), FOnyxSunnyLandExample::LevelPath);
+	if (!FOnyxWaterExample::Build(Error))
+	{
+		UE_LOG(LogOnyxExamples, Error, TEXT("Water test: %s"), *Error.ToString());
+		return 1;
+	}
+	UE_LOG(LogOnyxExamples, Display, TEXT("Water test built: %s"), FOnyxWaterExample::LevelPath);
 	return 0;
 }

@@ -10,7 +10,7 @@ class UOnyxClip;
 
 /**
  * Everything a character can play: its Clips by role (Idle, Run, Jump, Attack1, Hurt...) and the Messages its clips can
- * send. The Moveset component plays Idle, Run, Jump, Fall, Dash, WallSlide and Crouch by itself; Hurt, Death and attacks
+ * send. The Moveset component plays Idle, Run, Jump, Fall, Dash, WallSlide, Crouch and Swim by itself; Hurt, Death and attacks
  * are played by the character; any other role by name from Blueprint (Play Clip). Several characters can share one.
  * Open it in the Moveset Editor.
  */

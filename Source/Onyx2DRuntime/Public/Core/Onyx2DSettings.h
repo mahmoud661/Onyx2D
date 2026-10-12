@@ -52,6 +52,14 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Rendering")
 	TSoftObjectPtr<UMaterialParameterCollection> LightingParameters;
 
+	/** Onyx Water shader: depth gradient, caustics, bubbles, smooth surface line ("ShallowColor", "DeepColor", "SurfaceColor", "Depth", "Caustics", "Tint"...). */
+	UPROPERTY(Config, EditAnywhere, Category = "Rendering")
+	TSoftObjectPtr<UMaterialInterface> WaterMaterial;
+
+	/** Round, soft splash droplets for Onyx Water (vertex colour, "Tint"). */
+	UPROPERTY(Config, EditAnywhere, Category = "Rendering")
+	TSoftObjectPtr<UMaterialInterface> WaterDropMaterial;
+
 	/** Additive radial glow drawn around Onyx Light 2D actors ("Color", "Intensity", "Falloff"). */
 	UPROPERTY(Config, EditAnywhere, Category = "Rendering")
 	TSoftObjectPtr<UMaterialInterface> LightHaloMaterial;
@@ -67,4 +75,11 @@ public:
 	/** Imported textures get pixel-art settings (nearest filtering, no mips, uncompressed). */
 	UPROPERTY(Config, EditAnywhere, Category = "Editor")
 	bool bAutoConfigurePixelArtTextures = true;
+
+	/**
+	 * 2D levels (with tile maps, a Level Builder or Onyx Lighting) open in the flat side view of the gameplay plane,
+	 * framed on the level, instead of the perspective view.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Editor")
+	bool bOpenLevelsInSideView = true;
 };

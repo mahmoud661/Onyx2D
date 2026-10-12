@@ -5,6 +5,7 @@
 #include "Core/OnyxWorldSubsystem.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
+#include "World/OnyxWater.h"
 
 namespace
 {
@@ -14,6 +15,13 @@ namespace
 	constexpr float WallNormalMaxZ = 0.35f;
 	constexpr float WallJumpSteeringScale = 0.15f;
 	constexpr float RunThreshold = 15.f;
+	/** Swimming starts when the capsule centre is this far (x half height) under the surface... */
+	constexpr float SwimStartDepth = 0.15f;
+	/** ...and stops when it is this far above it. */
+	constexpr float SwimStopHeight = 0.6f;
+	/** At the surface the centre floats this far (x half height) under it: head out of the water. */
+	constexpr float FloatDepth = 0.35f;
+	constexpr float WaterExitGrace = 0.3f;
 }
 
 UOnyxMovementComponent::UOnyxMovementComponent()
@@ -98,6 +106,10 @@ float UOnyxMovementComponent::GetMaxSpeed() const
 	{
 		return DashSettings.Distance / FMath::Max(DashSettings.Duration, 0.01f);
 	}
+	if (IsSwimmingInWater())
+	{
+		return SwimSettings.SwimSpeed;
+	}
 	if (IsCrouchingDown())
 	{
 		return Super::GetMaxSpeed() * CrouchSpeedScale;
@@ -125,6 +137,8 @@ void UOnyxMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 	DashCooldownTimer = FMath::Max(DashCooldownTimer - DeltaTime, 0.f);
 	ControlLockTimer = FMath::Max(ControlLockTimer - DeltaTime, 0.f);
 	DropThroughTimer = FMath::Max(DropThroughTimer - DeltaTime, 0.f);
+	WaterExitTimer = FMath::Max(WaterExitTimer - DeltaTime, 0.f);
+	UpdateSwimming();
 	if (DropThroughTimer <= 0.f)
 	{
 		DropThroughSurface.Reset();
@@ -172,6 +186,11 @@ void UOnyxMovementComponent::TryConsumeJumpBuffer()
 {
 	if (JumpBufferTimer <= 0.f || bMovementLocked || bDashing || !CharacterOwner)
 	{
+		return;
+	}
+	if (IsSwimmingInWater())
+	{
+		SwimJump();
 		return;
 	}
 
@@ -307,6 +326,11 @@ void UOnyxMovementComponent::PhysCustom(float DeltaTime, int32 Iterations)
 		PhysDash(DeltaTime, Iterations);
 		return;
 	}
+	if (CustomMovementMode == CMOVE_OnyxSwim)
+	{
+		PhysSwim(DeltaTime, Iterations);
+		return;
+	}
 	Super::PhysCustom(DeltaTime, Iterations);
 }
 
@@ -339,6 +363,136 @@ void UOnyxMovementComponent::EndDash()
 	bDashing = false;
 	Velocity = FVector(DashDirection * RunSpeed, 0.f, 0.f);
 	SetMovementMode(MOVE_Falling);
+}
+
+// ---------------------------------------------------------------------------
+// Swimming
+// ---------------------------------------------------------------------------
+
+void UOnyxMovementComponent::SetWater(AOnyxWater* InWater)
+{
+	Water = InWater;
+}
+
+void UOnyxMovementComponent::ClearWater(const AOnyxWater* InWater)
+{
+	if (Water.Get() == InWater)
+	{
+		Water.Reset();
+	}
+}
+
+float UOnyxMovementComponent::GetCapsuleHalfHeight() const
+{
+	return CharacterOwner ? CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() : 50.f;
+}
+
+void UOnyxMovementComponent::UpdateSwimming()
+{
+	if (!UpdatedComponent || bDashing)
+	{
+		return;
+	}
+	const AOnyxWater* CurrentWater = Water.Get();
+	const float HalfHeight = GetCapsuleHalfHeight();
+	const float Center = UpdatedComponent->GetComponentLocation().Z;
+	if (IsSwimmingInWater())
+	{
+		// Out of the water (it drained, moved, or the character climbed out).
+		if (!CurrentWater || !SwimSettings.bCanSwim || Center > CurrentWater->GetSurfaceZ() + HalfHeight * SwimStopHeight)
+		{
+			SetMovementMode(MOVE_Falling);
+			OnStoppedSwimming.Broadcast();
+		}
+		return;
+	}
+	if (CurrentWater && SwimSettings.bCanSwim && WaterExitTimer <= 0.f && Center < CurrentWater->GetSurfaceZ() - HalfHeight * SwimStartDepth)
+	{
+		// The water takes most of the fall; jumps and air dashes come back.
+		Velocity.Z *= SwimSettings.EntrySpeedKept;
+		JumpsUsed = 0;
+		AirDashesUsed = 0;
+		bJumpActive = false;
+		SetMovementMode(MOVE_Custom, CMOVE_OnyxSwim);
+		OnStartedSwimming.Broadcast();
+	}
+}
+
+void UOnyxMovementComponent::SwimJump()
+{
+	JumpBufferTimer = 0.f;
+	const AOnyxWater* CurrentWater = Water.Get();
+	const float HalfHeight = GetCapsuleHalfHeight();
+	const float Center = UpdatedComponent->GetComponentLocation().Z;
+	if (CurrentWater && Center > CurrentWater->GetSurfaceZ() - HalfHeight)
+	{
+		// At the surface: jump out.
+		WaterExitTimer = WaterExitGrace;
+		JumpsUsed = 1;
+		bJumpActive = bJumpHeld;
+		Velocity.Z = GetJumpVelocityForHeight(SwimSettings.ExitJumpHeight);
+		SetMovementMode(MOVE_Falling);
+		OnStoppedSwimming.Broadcast();
+		OnJumped.Broadcast();
+		return;
+	}
+	Velocity.Z = FMath::Max(Velocity.Z, SwimSettings.StrokeSpeed);
+	OnSwimStroke.Broadcast();
+}
+
+void UOnyxMovementComponent::PhysSwim(float DeltaTime, int32 Iterations)
+{
+	if (DeltaTime < MIN_TICK_TIME)
+	{
+		return;
+	}
+	const AOnyxWater* CurrentWater = Water.Get();
+
+	// Left / right: towards the stick direction at swim speed.
+	const float Input = MaxAcceleration > 0.f ? FMath::Clamp(Acceleration.X / MaxAcceleration, -1.f, 1.f) : 0.f;
+	Velocity.X = FMath::FInterpConstantTo(Velocity.X, Input * SwimSettings.SwimSpeed, DeltaTime, SwimSettings.SwimAcceleration);
+
+	// Up / down: sink slowly, dive with Down, strokes (Jump) push up; water drag calms everything.
+	Velocity.Z += GetBaseGravityZ() * SwimSettings.SinkGravityScale * DeltaTime;
+	if (bCrouchHeld)
+	{
+		Velocity.Z = FMath::FInterpConstantTo(Velocity.Z, -SwimSettings.DiveSpeed, DeltaTime, SwimSettings.SwimAcceleration);
+	}
+	Velocity.Z *= FMath::Exp(-1.5f * DeltaTime);
+	Velocity.Z = FMath::Max(Velocity.Z, -(bCrouchHeld ? SwimSettings.DiveSpeed : SwimSettings.MaxSinkSpeed));
+	Velocity.Y = 0.f;
+
+	if (CurrentWater)
+	{
+		// Bob at the surface with the head out: rising slows down near the top instead of leaving the water.
+		const FVector Location = UpdatedComponent->GetComponentLocation();
+		const float FloatZ = CurrentWater->GetSurfaceHeightAt(Location.X) - GetCapsuleHalfHeight() * FloatDepth; // rides the waves
+		const float Center = Location.Z;
+		if (SwimSettings.bFloatAtSurface && !bCrouchHeld && Center > FloatZ)
+		{
+			Velocity.Z = FMath::Min(Velocity.Z, (FloatZ - Center) * 6.f);
+		}
+		const FVector2D Current = CurrentWater->GetCurrentAt(UpdatedComponent->GetComponentLocation());
+		Velocity.X += Current.X * DeltaTime;
+		Velocity.Z += Current.Y * DeltaTime;
+	}
+
+	const FVector Delta = Velocity * DeltaTime;
+	FHitResult Hit(1.f);
+	SafeMoveUpdatedComponent(Delta, UpdatedComponent->GetComponentQuat(), true, Hit);
+	if (Hit.IsValidBlockingHit())
+	{
+		HandleImpact(Hit, DeltaTime, Delta);
+		SlideAlongSurface(Delta, 1.f - Hit.Time, Hit.Normal, Hit, true);
+		if (Hit.Normal.Z > 0.7f && Velocity.Z < 0.f)
+		{
+			Velocity.Z = 0.f; // resting on the bottom
+		}
+		if (FMath::Abs(Hit.Normal.X) > 0.7f)
+		{
+			Velocity.X = 0.f;
+		}
+	}
 }
 
 float UOnyxMovementComponent::GetDashCooldownFraction() const
@@ -448,6 +602,10 @@ EOnyxLocomotion UOnyxMovementComponent::GetLocomotionState() const
 	if (bWallSliding)
 	{
 		return EOnyxLocomotion::WallSlide;
+	}
+	if (IsSwimmingInWater())
+	{
+		return EOnyxLocomotion::Swim;
 	}
 	if (IsFalling())
 	{

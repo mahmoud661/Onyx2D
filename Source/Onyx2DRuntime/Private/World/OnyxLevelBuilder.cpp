@@ -20,6 +20,7 @@
 #include "World/OnyxHazardVolume.h"
 #include "World/OnyxLevelExit.h"
 #include "World/OnyxMovingPlatform.h"
+#include "World/OnyxWater.h"
 #include "World/OnyxOneWayPlatform.h"
 #include "World/OnyxPickup.h"
 
@@ -36,6 +37,7 @@ namespace
 	constexpr TCHAR CheckpointTile = TEXT('K');
 	constexpr TCHAR ExitTile = TEXT('X');
 	constexpr TCHAR MovingPlatformTile = TEXT('M');
+	constexpr TCHAR WaterTile = TEXT('~');
 	constexpr float EngineCubeSize = 100.f;
 
 	const TCHAR* DemoLayout =
@@ -107,6 +109,23 @@ bool AOnyxLevelBuilder::GetPlayerStart(FVector& OutLocation) const
 		}
 	}
 	return false;
+}
+
+FBox AOnyxLevelBuilder::GetLayoutBounds() const
+{
+	const TArray<FString> Rows = GetRows();
+	int32 Columns = 0;
+	for (const FString& Row : Rows)
+	{
+		Columns = FMath::Max(Columns, Row.Len());
+	}
+	if (Rows.IsEmpty() || Columns == 0)
+	{
+		return FBox(ForceInit);
+	}
+	// Tiles are centred on their grid points: the layout reaches half a tile past the first and last ones.
+	const FVector HalfTile(TileSize * 0.5f, 0.f, TileSize * 0.5f);
+	return FBox(TileToWorld(0, Rows.Num() - 1, Rows.Num()) - HalfTile, TileToWorld(Columns - 1, 0, Rows.Num()) + HalfTile);
 }
 
 void AOnyxLevelBuilder::RebuildStatic()
@@ -244,6 +263,44 @@ void AOnyxLevelBuilder::SpawnDynamic()
 					Exit->FinishSpawning(FTransform(Location + FVector(0.f, 0.f, 40.f)));
 				}
 				break;
+			case WaterTile:
+			{
+				// A body of water: the run of ~ on this row, as deep as the rows below repeat it.
+				int32 End = Column;
+				while (End + 1 < Line.Len() && Line[End + 1] == WaterTile)
+				{
+					++End;
+				}
+				const bool bStartedAbove = Row > 0 && Column < Rows[Row - 1].Len() && Rows[Row - 1][Column] == WaterTile;
+				if (!bStartedAbove)
+				{
+					auto IsWaterRow = [&Rows, Column, End](int32 Other)
+					{
+						for (int32 Cell = Column; Cell <= End; ++Cell)
+						{
+							if (Cell >= Rows[Other].Len() || Rows[Other][Cell] != WaterTile)
+							{
+								return false;
+							}
+						}
+						return true;
+					};
+					int32 Depth = 1;
+					while (Row + Depth < Rows.Num() && IsWaterRow(Row + Depth))
+					{
+						++Depth;
+					}
+					const int32 Count = End - Column + 1;
+					const FTransform Surface(Location + FVector((Count - 1) * TileSize * 0.5f, 0.f, TileSize * 0.5f));
+					if (AOnyxWater* Water = World->SpawnActorDeferred<AOnyxWater>(AOnyxWater::StaticClass(), Surface, this))
+					{
+						Water->Size = FVector2D(Count * TileSize, Depth * TileSize);
+						Water->FinishSpawning(Surface);
+					}
+				}
+				Column = End;
+				break;
+			}
 			case MovingPlatformTile:
 			{
 				int32 End = Column;

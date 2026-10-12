@@ -17,6 +17,7 @@ class UStaticMeshComponent;
  *   P  player start         E  enemy                L  light
  *   C  coin                 H  health pickup        K  checkpoint
  *   X  level exit           M  moving platform (a run of M is one platform; it travels right)
+ *   ~  water (type it as rectangles: a run of ~, repeated on the rows below for depth)
  *   any other character is empty space. The first line is the top of the level.
  * Solid blocks and the background are previewed live in the editor.
  */
@@ -75,6 +76,10 @@ public:
 	/** World location of the 'P' tile. */
 	UFUNCTION(BlueprintPure, Category = "Onyx2D")
 	bool GetPlayerStart(FVector& OutLocation) const;
+
+	/** The rectangle the typed layout covers in the world (X and Z; invalid when the layout is empty). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D")
+	FBox GetLayoutBounds() const;
 
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D")
 	void RebuildStatic();

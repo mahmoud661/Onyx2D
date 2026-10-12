@@ -27,4 +27,16 @@ public:
 
 	/** Point on the gameplay plane (Y = 0) the level viewport is looking at, snapped to a 50 cm grid. */
 	static FVector GetViewportFocusOnPlane();
+
+	/** A 2D level: it has tile maps, a Level Builder or Onyx Lighting. */
+	static bool IsLevel2D(UWorld* World);
+
+	/** What to frame in a 2D level: its tile maps and Level Builders (invalid when it has none). */
+	static FBox GetLevelBounds2D(UWorld* World);
+
+	/**
+	 * Turns the editor's perspective viewports into the flat side view of the gameplay plane (lit, animating), framing
+	 * Area when it is valid.
+	 */
+	static void ShowSideView(const FBox& Area);
 };

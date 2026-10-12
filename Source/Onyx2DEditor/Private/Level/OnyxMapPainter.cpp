@@ -172,6 +172,31 @@ FVector FOnyxMapPainter::CellToWorld(const FIntPoint& Cell) const
 	return Location;
 }
 
+FVector2D FOnyxMapPainter::WorldToMapPixels(const FVector& Location) const
+{
+	const APaperTileMapActor* Actor = FindMapActor();
+	if (!Actor || !TileMap.IsValid())
+	{
+		return FVector2D::ZeroVector;
+	}
+	// Two neighbouring tile centres give the map's axes in the world; solve Location in those axes (X / Z plane).
+	const UPaperTileMapComponent* Map = Actor->GetRenderComponent();
+	const FVector Origin = Map->GetTileCenterPosition(0, 0, 0, true);
+	const FVector AxisX = Map->GetTileCenterPosition(1, 0, 0, true) - Origin;
+	const FVector AxisY = Map->GetTileCenterPosition(0, 1, 0, true) - Origin;
+	const double Det = AxisX.X * AxisY.Z - AxisX.Z * AxisY.X;
+	if (FMath::IsNearlyZero(Det))
+	{
+		return FVector2D::ZeroVector;
+	}
+	const double DX = Location.X - Origin.X;
+	const double DZ = Location.Z - Origin.Z;
+	const double Column = (DX * AxisY.Z - DZ * AxisY.X) / Det;
+	const double Row = (AxisX.X * DZ - AxisX.Z * DX) / Det;
+	const FIntPoint Tile = GetTileSize();
+	return FVector2D((Column + 0.5) * Tile.X, (Row + 0.5) * Tile.Y);
+}
+
 bool FOnyxMapPainter::WorldToCell(const FVector& Location, FIntPoint& OutCell) const
 {
 	const APaperTileMapActor* Actor = FindMapActor();
@@ -552,36 +577,124 @@ void FOnyxMapPainter::ForEachObject(TFunctionRef<void(const FOnyxPlacedObject&)>
 		return;
 	}
 	const FOnyxBrushLibrary& Library = FOnyxBrushLibrary::Get();
+	const FIntRect Map(FIntPoint::ZeroValue, GetMapSize() - FIntPoint(1, 1));
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
 		FOnyxPlacedObject Object;
 		const TSharedPtr<FOnyxPainterBrush> Brush = Library.FindFor(*It);
-		if (Brush.IsValid() && WorldToCell(ObjectAnchor(*It, *Brush), Object.Cell))
+		if (!Brush.IsValid())
 		{
-			Object.Actor = *It;
-			Object.Layer = GetObjectLayer(*It);
-			Visit(Object);
+			continue;
 		}
+		if (Brush->IsArea())
+		{
+			FIntRect Cells;
+			if (!GetAreaCells(*It, Cells) || Cells.Max.X < Map.Min.X || Cells.Max.Y < Map.Min.Y || Cells.Min.X > Map.Max.X || Cells.Min.Y > Map.Max.Y)
+			{
+				continue;
+			}
+			Object.Area = Cells;
+			Object.Cell = Cells.Min;
+		}
+		else if (!WorldToCell(ObjectAnchor(*It, *Brush), Object.Cell))
+		{
+			continue;
+		}
+		Object.Actor = *It;
+		Object.Layer = GetObjectLayer(*It);
+		Visit(Object);
 	}
 }
 
-AActor* FOnyxMapPainter::FindObject(const FIntPoint& Cell, FName ObjectLayer) const
+AActor* FOnyxMapPainter::FindObject(const FIntPoint& Cell, FName ObjectLayer, bool bIncludeAreas) const
 {
 	AActor* Found = nullptr;
+	AActor* Area = nullptr;
 	ForEachObject([&](const FOnyxPlacedObject& Object)
 	{
-		if (!Found && Object.Cell == Cell && Object.Layer == ObjectLayer)
+		if (Object.Layer != ObjectLayer)
 		{
-			Found = Object.Actor;
+			return;
+		}
+		if (!Object.Area.IsSet())
+		{
+			Found = !Found && Object.Cell == Cell ? Object.Actor : Found;
+		}
+		else if (!Area && bIncludeAreas && Cell.X >= Object.Area->Min.X && Cell.X <= Object.Area->Max.X && Cell.Y >= Object.Area->Min.Y && Cell.Y <= Object.Area->Max.Y)
+		{
+			Area = Object.Actor;
 		}
 	});
-	return Found;
+	return Found ? Found : Area; // things in the water before the water itself
+}
+
+FBox FOnyxMapPainter::CellsToWorldBox(const FIntRect& Cells) const
+{
+	const APaperTileMapActor* Actor = FindMapActor();
+	if (!Actor)
+	{
+		return FBox(ForceInit);
+	}
+	const UPaperTileMapComponent* Map = Actor->GetRenderComponent();
+	const FVector TopLeft = Map->GetTileCornerPosition(Cells.Min.X, Cells.Min.Y, 0, true);
+	const FVector BottomRight = Map->GetTileCornerPosition(Cells.Max.X + 1, Cells.Max.Y + 1, 0, true);
+	return FBox(FVector(FMath::Min(TopLeft.X, BottomRight.X), 0.f, FMath::Min(TopLeft.Z, BottomRight.Z)),
+		FVector(FMath::Max(TopLeft.X, BottomRight.X), 0.f, FMath::Max(TopLeft.Z, BottomRight.Z)));
+}
+
+bool FOnyxMapPainter::GetAreaCells(const AActor* Actor, FIntRect& OutCells) const
+{
+	const TSharedPtr<FOnyxPainterBrush> Brush = FOnyxBrushLibrary::Get().FindFor(Actor);
+	if (!Brush.IsValid() || !Brush->IsArea() || !FindMapActor())
+	{
+		return false;
+	}
+	const FBox Area = Brush->GetArea(Actor);
+	const FVector2D TopLeft = WorldToMapPixels(FVector(Area.Min.X, 0.f, Area.Max.Z));
+	const FVector2D BottomRight = WorldToMapPixels(FVector(Area.Max.X, 0.f, Area.Min.Z));
+	const FIntPoint Tile = GetTileSize();
+	OutCells.Min = FIntPoint(FMath::RoundToInt(TopLeft.X / Tile.X), FMath::RoundToInt(TopLeft.Y / Tile.Y));
+	OutCells.Max = FIntPoint(FMath::RoundToInt(BottomRight.X / Tile.X) - 1, FMath::RoundToInt(BottomRight.Y / Tile.Y) - 1).ComponentMax(OutCells.Min);
+	return true;
+}
+
+AActor* FOnyxMapPainter::PlaceArea(const FIntRect& Cells, const FOnyxPainterBrush& Brush, FName ObjectLayer)
+{
+	UWorld* World = FOnyxLevelTools::GetEditorWorld();
+	if (!World || !Brush.IsArea() || !FindMapActor())
+	{
+		return nullptr;
+	}
+	FBox Area = CellsToWorldBox(Cells);
+	Area.Min.Y = Area.Max.Y = GetObjectLayerDepth(ObjectLayer);
+	AActor* Actor = FOnyxBrushLibrary::Get().Spawn(Brush, World, FVector(Area.GetCenter().X, Area.Min.Y, Area.Max.Z));
+	if (!Actor)
+	{
+		return nullptr;
+	}
+	Actor->Tags.AddUnique(*(LayerTagPrefix + ObjectLayer.ToString()));
+	Brush.SetArea(Actor, Area);
+	return Actor;
+}
+
+bool FOnyxMapPainter::SetAreaCells(AActor* Actor, const FIntRect& Cells)
+{
+	const TSharedPtr<FOnyxPainterBrush> Brush = FOnyxBrushLibrary::Get().FindFor(Actor);
+	FIntRect Current;
+	if (!Brush.IsValid() || !Brush->IsArea() || !GetAreaCells(Actor, Current) || Current == Cells)
+	{
+		return false;
+	}
+	FBox Area = CellsToWorldBox(Cells);
+	Area.Min.Y = Area.Max.Y = Actor->GetActorLocation().Y;
+	Brush->SetArea(Actor, Area);
+	return true;
 }
 
 AActor* FOnyxMapPainter::PlaceObject(const FIntPoint& Cell, const FOnyxPainterBrush& Brush, FName ObjectLayer)
 {
 	UWorld* World = FOnyxLevelTools::GetEditorWorld();
-	if (!World || !IsValidCell(Cell) || !FindMapActor() || FindObject(Cell, ObjectLayer))
+	if (!World || !IsValidCell(Cell) || !FindMapActor() || FindObject(Cell, ObjectLayer, false))
 	{
 		return nullptr;
 	}
@@ -625,7 +738,8 @@ bool FOnyxMapPainter::MoveObject(AActor* Actor, const FIntPoint& Cell)
 {
 	const TSharedPtr<FOnyxPainterBrush> Brush = FOnyxBrushLibrary::Get().FindFor(Actor);
 	FIntPoint Current;
-	if (!Actor || !Brush.IsValid() || !IsValidCell(Cell) || !WorldToCell(ObjectAnchor(Actor, *Brush), Current) || Current == Cell || FindObject(Cell, GetObjectLayer(Actor)))
+	if (!Actor || !Brush.IsValid() || Brush->IsArea() || !IsValidCell(Cell) || !WorldToCell(ObjectAnchor(Actor, *Brush), Current) || Current == Cell
+		|| FindObject(Cell, GetObjectLayer(Actor), false))
 	{
 		return false;
 	}

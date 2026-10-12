@@ -21,6 +21,16 @@ public:
 	TArray<FSoftObjectPath> CustomBrushes;
 };
 
+/** How the map canvas draws an area object: a top-to-bottom gradient with a line along its top edge. */
+struct FOnyxAreaLook
+{
+	FLinearColor Top = FLinearColor(0.2f, 0.55f, 0.9f, 0.5f);
+	FLinearColor Bottom = FLinearColor(0.05f, 0.15f, 0.4f, 0.8f);
+	FLinearColor Edge = FLinearColor::White;
+	/** The top edge ripples (water). */
+	bool bWavyEdge = false;
+};
+
 /** Something that can be painted onto a cell as an actor: a gameplay piece or one of your own assets. */
 struct FOnyxPainterBrush
 {
@@ -32,6 +42,8 @@ struct FOnyxPainterBrush
 	/** Custom brushes: the Blueprint / flipbook / sprite / mesh asset. */
 	FSoftObjectPath Asset;
 	bool bCustom = false;
+	/** One of the project's characters, listed by itself (not removable from the palette). */
+	bool bProject = false;
 	/** Stand on the bottom of the cell (characters, player starts, your own objects) instead of sitting in its centre. */
 	bool bStandOnFloor = false;
 	/** Object layer it goes to by default ("Entities" or "Decor"). */
@@ -43,6 +55,18 @@ struct FOnyxPainterBrush
 	TFunction<void(AActor*)> Configure;
 	/** Built-in brushes: recognises actors placed before brush tags existed. */
 	TFunction<bool(const AActor*)> Matches;
+
+	/**
+	 * Area brushes (water): the actor fills a block of cells you drag out, and can be moved and resized on the canvas.
+	 * GetArea reads the world rectangle it covers (X and Z of Min / Max); SetArea makes it cover one.
+	 */
+	TFunction<FBox(const AActor*)> GetArea;
+	TFunction<void(AActor*, const FBox&)> SetArea;
+	TFunction<FOnyxAreaLook(const AActor*)> GetAreaLook;
+	/** Cells a click (rather than a drag) covers. */
+	FIntPoint DefaultAreaCells = FIntPoint(8, 4);
+
+	bool IsArea() const { return GetArea && SetArea; }
 };
 
 /**
@@ -75,16 +99,25 @@ public:
 
 	/** Small icon for lists and canvas markers. */
 	const FSlateBrush* GetIcon(const FOnyxPainterBrush& Brush) const;
-	/** For sprite/flipbook brushes: the texture and pixel rectangle of the first frame. */
-	bool GetPreviewSprite(const FOnyxPainterBrush& Brush, UTexture2D*& OutTexture, FIntRect& OutRect) const;
+	/**
+	 * What the brush looks like at Time (seconds; animations loop): the texture and pixel rectangle of its sprite.
+	 * Sprites, flipbooks, and actor classes that show one (characters: their Idle clip).
+	 */
+	bool GetPreviewSprite(const FOnyxPainterBrush& Brush, UTexture2D*& OutTexture, FIntRect& OutRect, double Time = 0.0) const;
 
 	DECLARE_MULTICAST_DELEGATE(FOnChanged);
 	FOnChanged OnChanged;
 
 private:
 	FOnyxBrushLibrary();
+	~FOnyxBrushLibrary();
 	void Rebuild();
+	/** Brushes for the project's character Blueprints. */
+	void AddProjectCharacters();
+	/** A Blueprint was added, removed or renamed: rebuild on the next tick. */
+	void OnAssetsChanged(const FAssetData& Asset);
 	TSharedPtr<FOnyxPainterBrush> MakeCustomBrush(const FSoftObjectPath& Path) const;
 
 	TArray<TSharedRef<FOnyxPainterBrush>> Brushes;
+	bool bRebuildQueued = false;
 };

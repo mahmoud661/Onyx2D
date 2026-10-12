@@ -16,6 +16,7 @@
 #include "LevelEditorViewport.h"
 #include "Lighting/OnyxLight2D.h"
 #include "ScopedTransaction.h"
+#include "World/OnyxLevelBuilder.h"
 
 namespace
 {
@@ -45,6 +46,59 @@ FVector FOnyxLevelTools::GetViewportFocusOnPlane()
 			: FVector(Origin.X, 0.f, Origin.Z);
 	}
 	return FVector(FMath::GridSnap(Point.X, PlacementGrid), 0.f, FMath::GridSnap(Point.Z, PlacementGrid));
+}
+
+bool FOnyxLevelTools::IsLevel2D(UWorld* World)
+{
+	return World && (LevelHas<APaperTileMapActor>(World) || LevelHas<AOnyxLevelBuilder>(World) || LevelHas<AOnyxLightingEnvironment>(World));
+}
+
+FBox FOnyxLevelTools::GetLevelBounds2D(UWorld* World)
+{
+	FBox Bounds(ForceInit);
+	if (!World)
+	{
+		return Bounds;
+	}
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		if (It->IsA<APaperTileMapActor>() || It->IsA<AOnyxLevelBuilder>())
+		{
+			// Visible parts only: a Level Builder's background block is far wider than its level.
+			const FBox ActorBounds = It->IsA<AOnyxLevelBuilder>() ? CastChecked<AOnyxLevelBuilder>(*It)->GetLayoutBounds() : It->GetComponentsBoundingBox(false);
+			Bounds += ActorBounds.IsValid ? ActorBounds : FBox(ForceInit);
+		}
+	}
+	return Bounds;
+}
+
+void FOnyxLevelTools::ShowSideView(const FBox& Area)
+{
+	if (!GEditor)
+	{
+		return;
+	}
+	for (FLevelEditorViewportClient* Client : GEditor->GetLevelViewportClients())
+	{
+		if (!Client->IsPerspective() && Client->GetViewportType() != LVT_OrthoXZ)
+		{
+			continue; // a viewport the user set to another side or top view stays
+		}
+		Client->SetViewportType(LVT_OrthoXZ);
+		Client->SetViewModes(VMI_Lit, VMI_Lit);
+		Client->SetRealtime(true); // water, flipbooks and lights animate
+		const FIntPoint Size = Client->Viewport ? Client->Viewport->GetSizeXY() : FIntPoint::ZeroValue;
+		const float UnitsPerPixel = Size.X > 0 && Size.Y > 0 ? Client->GetOrthoUnitsPerPixel(Client->Viewport) : 0.f;
+		if (Area.IsValid && UnitsPerPixel > KINDA_SMALL_NUMBER)
+		{
+			// Scale the zoom from what it shows now (how zoom maps to cm per pixel depends on editor settings), with a margin.
+			const FVector Extent = Area.GetExtent();
+			const float Wanted = 1.08f * FMath::Max(2.f * Extent.X / Size.X, 2.f * Extent.Z / Size.Y);
+			Client->SetOrthoZoom(FMath::Clamp(Client->GetOrthoZoom() * Wanted / UnitsPerPixel, MIN_ORTHOZOOM, MAX_ORTHOZOOM));
+			Client->SetViewLocation(FVector(Area.GetCenter().X, 1000.f, Area.GetCenter().Z));
+		}
+		Client->Invalidate();
+	}
 }
 
 float FOnyxLevelTools::GetFreeMapLeftEdge(float TileWidthWorld, float GapWorld)

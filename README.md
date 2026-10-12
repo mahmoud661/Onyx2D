@@ -43,9 +43,10 @@ Copy this folder into your project as `Plugins/Onyx2D`, open the project and the
 | 2D lighting | `AOnyxLightingEnvironment`, `UOnyxLight2DComponent`, `AOnyxLight2D`, `UOnyxShadowCasterComponent`, `UOnyxLightingSubsystem` | Real 2D lighting (no 3D lights on flat cards): soft 2D lights with 2D shadows, normal-map relief, moods with blending (see *2D Lighting* below) |
 | Tile collision | `UOnyxTileCollisionComponent`, `FOnyxTileCollision` | Per-tile **None / Solid / One-Way / Hazard** types, merged into a few boxes, invisible walls at the map edges (see *Collision* below) |
 | World | `AOnyxOneWayPlatform`, `AOnyxMovingPlatform`, `AOnyxHazardVolume` | Jump-through platforms, moving platforms (drag the waypoints in the viewport, ping-pong or loop), spikes/lava |
+| Water | `AOnyxWater` | Characters swim, physics objects float, bob and drift with the current, the surface ripples and splashes (see *Water* below) |
 | Pickups & progress | `AOnyxPickup`, `AOnyxCheckpoint`, `AOnyxLevelExit`, `UOnyxScoreSubsystem` | Coin / health pickups (glowing placeholder or your own animated flipbook, with a collect effect), checkpoints that set the respawn point and heal, level exits that fade out and open the next level, a coin counter that survives level changes |
 | Backgrounds | `AOnyxParallaxBackground`, `UOnyxParallaxComponent` | Any number of tiling texture layers, each with its own scroll factor and depth |
-| Prototyping | `AOnyxLevelBuilder` | **Type a level as text** (`#` block, `=` platform, `^` spikes, `P` player, `E` enemy, `L` light, `C` coin, `H` health, `K` checkpoint, `X` exit, `M` moving platform) with live editor preview |
+| Prototyping | `AOnyxLevelBuilder` | **Type a level as text** (`#` block, `=` platform, `^` spikes, `~` water, `P` player, `E` enemy, `L` light, `C` coin, `H` health, `K` checkpoint, `X` exit, `M` moving platform) with live editor preview |
 | Patrols | `UOnyxPatrolComponent` | **Walk** (turn at walls / ledges, chase), **Hop** (frogs, slimes), **Fly** (birds, bats: hover, face the player); with Stompable they are defeated Mario-style |
 | Effects | `AOnyxFlipbookEffect` | Play any flipbook once at a spot (sparkles, puffs, explosions), centred whatever the sprites' pivot |
 | Game setup | `AOnyxGameMode`, `AOnyxPlayerController` | Works out of the box |
@@ -72,7 +73,7 @@ and the layout is remembered. The console command `Onyx2D.Open <Tool>` (e.g. `On
 | **Import** | Drop PNG files or whole folders from the file explorer (or **Add Files / Add Folder**) and Onyx2D builds everything: tile sheets become padded, lit tile sets with collision (tile size, gaps and border detected from the file name, transparent gaps or tile edges); animations become a playable character (frame sequences `run-1.png, run-2.png...`, one strip per animation `idle.png, run.png`, or a sheet with one animation per row: words like *idle, run, jump, fall, attack, hurt, death, crouch, climb* pick the animation, the rest of the name or the folder groups files per character; all frames share one cell with the feet on one line); numbered frames without an animation word become animated sprites; prop sheets are cut into one sprite per prop; backgrounds become textures for the Parallax tab. Every guess is listed (type, name, tile size, Player/Enemy) and can be changed before **Build All**. Scripts can call `UOnyxEditorLibrary::ImportArt`. |
 | **Movesets** | The Moveset Editor. Left: the **Moveset**'s clips by role (missing standard roles, like Run or Hurt, are one click away). Middle: a big preview with transport controls (play, step, loop; sounds play while previewing) and the **timeline**: a block per frame as wide as its hold (drag the right edge to change it, drag to reorder, right-click to duplicate / delete) and event **lanes** (right-click to send a Message or add a Sound, Effect, Camera Shake, a Window or your own event at that time; drag to move, snaps to frames), a ruler to scrub (Ctrl + wheel zooms). Right: the clip's loop / frames per second / speed, the selected frame (hold, sprite) and the selected event. **New Clip** opens the sprite sheet slicer (detects the grid; click frames in play order or drag across a run). **New Character** makes a playable character from the moveset with the behaviours and team you pick. Double-clicking a Moveset or a Clip opens it here; everything is undoable. |
 | **Tiles** | Details panel for tile sheet, tile size, margin, spacing, collision and the map (size, scale, ground rows/tile). **Create Tile Set** / **Create Tile Map** (places the map and opens it in the Level Painter). The ground tile is outlined on the sheet. |
-| **Level Painter** | LDtk-style level editor. **Layers** on the left (the tile map's tile layers plus an **Entities** layer, each with an eye toggle), your **tile set palette** or the **entity palette** under them, a big canvas in the middle and an **Inspector** on the right. Tools: **Brush (B)**, **Rectangle (R)**, **Fill (F)**, **Erase (E)**, **Pick (I)**, **Select (S)**, **Terrain (T)** (auto-tiling); brush options **Flip X (X)**, **Flip Y (Y)** and **Random (V)** (each cell a random tile from the selected block); right-drag erases, middle-drag or Space+drag pans, the wheel zooms. Tiles go straight into the Paper2D tile map (with collision on Ground); entities (player start, patrolling foe, coin, health, checkpoint, exit, moving/one-way platform, hazard, light) are real actors placed on the cell, which you can drag around and edit in the Inspector; the canvas only shows the objects that sit on this map. **New Map** asks for a name, size and optional ground row, makes the map from the selected tile set and places it beside the maps already in the level. Everything is undoable. |
+| **Level Painter** | LDtk-style level editor. Characters, objects and decorations are drawn as they look in the level (their sprites and animations, playing), and every character Blueprint in the project is in the object palette. **Layers** on the left (the tile map's tile layers plus an **Entities** layer, each with an eye toggle), your **tile set palette** or the **entity palette** under them, a big canvas in the middle and an **Inspector** on the right. Tools: **Brush (B)**, **Rectangle (R)**, **Fill (F)**, **Erase (E)**, **Pick (I)**, **Select (S)**, **Terrain (T)** (auto-tiling); brush options **Flip X (X)**, **Flip Y (Y)** and **Random (V)** (each cell a random tile from the selected block); right-drag erases, middle-drag or Space+drag pans, the wheel zooms. Tiles go straight into the Paper2D tile map (with collision on Ground); entities (player start, patrolling foe, coin, health, checkpoint, exit, moving/one-way platform, hazard, light) are real actors placed on the cell, which you can drag around and edit in the Inspector; the canvas only shows the objects that sit on this map. **New Map** asks for a name, size and optional ground row, makes the map from the selected tile set and places it beside the maps already in the level. Everything is undoable. |
 | **Parallax** | **Add Background** places an `AOnyxParallaxBackground`; its layers are edited right in the panel. **Add Layers** turns every texture selected in the Content Browser into a layer (far to near, with sensible factors and depths). |
 | **Level** | **Set Up Level**, **Configure Project** (turns off Lumen, virtual shadow maps, distance fields, motion blur, auto exposure and TAA; makes Onyx Game Mode the default), **Check Level**, Play, Settings, Help. A grid of every Onyx actor: click to place it where the viewport looks, or drag it into the viewport. The **Level Check** lists problems (missing player start, wrong game mode, no lights, actors off the gameplay plane, unlit sprites, exits without a next level...) each with a **Fix** button, plus **Fix All**; double-click selects the actor. |
 
@@ -137,6 +138,33 @@ Sprites are lit the way 2D engines do it (like Unity's 2D renderer), not by 3D l
   events** on a clip's timeline (they can follow the character). **Hitboxes** have a *Hit Sound* and *Hit Effect*;
   checkpoints, level exits, pickups and light switches have their own sounds.
 - From Blueprint: *Play Sound At*, *Play Sound 2D*, *Play Sound Attached*, *Set Level Music*, *Push Music* / *Pop Music* (boss fights).
+
+## Water
+
+**Onyx Water** (`AOnyxWater`) is a body of water: its location is the middle of the surface, *Size* sets width and depth.
+In the **Level Painter**, pick *Water* on the Entities layer and drag out the block of cells it fills (a click gives 8 x 4);
+with **Select (S)** drag its edges or corners to resize it and its inside to move it, and edit it in the Inspector.
+Physics works like Unity's buoyancy effector, plus what Unity leaves to you:
+
+- **Floating:** physics objects are lifted at several points across them by the part under the surface (*Density* in g/cm³,
+  1 = water: lighter objects float, heavier ones sink), so they bob, tilt and right themselves; *Steadiness* settles them on
+  a flat side like game crates (0 = pure physics, where a square block floats on a corner); slowed by *Drag* and *Spin Drag*,
+  carried by the *Current* (with *Current Variation* over time).
+- **Physics Prop** (`AOnyxPhysicsProp`, in the painter's palette and Place Actors): any sprite as a crate, barrel or rock that
+  falls, tumbles and floats, with its own *Density* (wood 0.6, stone 2.5). It moves only in the level's plane.
+- **Swimming:** Onyx characters swim when their middle goes under. Jump strokes upward, Down dives, at the surface they bob
+  with the head out and Jump leaves the water. Tune it in *Swim* on the movement component (speed, stroke, sinking, exit jump);
+  the Moveset plays a *Swim* clip if the character has one (else Fall). Events: *On Started Swimming*, *On Stopped Swimming*, *On Swim Stroke*.
+- **Waves:** a spring surface that ripples by itself and splashes when anything crosses it, harder the faster it goes,
+  with an optional *Splash Effect* (flipbook) and *Splash Sound*.
+- **Look:** a smooth shader, not pixels: a gradient from *Shallow Color* to *Deep Color*, drifting caustics and light shafts,
+  rising bubbles and an anti-aliased surface line, drawn in front of what is in the water and darkened by the lighting mood.
+- In a typed level, `~` is water (a run of `~`, repeated on the rows below for depth). `/Game/Maps/Test_Water` (built with the
+  examples after Sunny Land) is a Sunny Land tile map with a pool, crates that float, a rock that sinks and gems to dive for,
+  all placed with the Level Painter, so it opens there ready to edit.
+
+2D levels (with tile maps, a Level Builder or Onyx Lighting) open in the editor's flat **side view** of the gameplay plane,
+framed on the level (*Project Settings → Onyx2D → Open Levels In Side View*).
 
 ## Interaction
 

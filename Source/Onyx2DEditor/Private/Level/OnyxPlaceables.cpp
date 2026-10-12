@@ -13,7 +13,9 @@
 #include "World/OnyxMovingPlatform.h"
 #include "World/OnyxOneWayPlatform.h"
 #include "World/OnyxParallaxBackground.h"
+#include "World/OnyxPhysicsProp.h"
 #include "World/OnyxPickup.h"
+#include "World/OnyxWater.h"
 #include "World/OnyxLightSwitch.h"
 #include "Audio/OnyxLevelAudio.h"
 
@@ -28,6 +30,8 @@ const TArray<FOnyxPlaceable>& GetOnyxPlaceables()
 		{ AOnyxMovingPlatform::StaticClass(), INVTEXT("Moving Platform"), INVTEXT("Travels between waypoints you drag in the viewport.") },
 		{ AOnyxOneWayPlatform::StaticClass(), INVTEXT("One-Way Platform"), INVTEXT("Jump up through it, drop down with Down + Jump.") },
 		{ AOnyxHazardVolume::StaticClass(), INVTEXT("Hazard"), INVTEXT("Spikes / lava: hurts on touch.") },
+		{ AOnyxWater::StaticClass(), INVTEXT("Water"), INVTEXT("Characters swim, physics objects float and bob, the surface ripples and splashes. Set its Size, current and colours.") },
+		{ AOnyxPhysicsProp::StaticClass(), INVTEXT("Physics Prop"), INVTEXT("A crate, barrel or rock (any sprite) that falls, tumbles and floats in water, or sinks when it is denser.") },
 		{ AOnyxLightingEnvironment::StaticClass(), INVTEXT("Onyx Lighting"), INVTEXT("The level's look: sun, ambient, depth fog, bloom, colour grade. Presets: Day, Dusk, Night, Cave, Dungeon.") },
 		{ AOnyxLight2D::StaticClass(), INVTEXT("2D Light"), INVTEXT("Torch, candle, lantern, magic, crystal, lava or window light with a glow halo; flickers or pulses; optional crackle / hum sound.") },
 		{ AOnyxLightSwitch::StaticClass(), INVTEXT("Light Switch"), INVTEXT("Lever or pressure plate that turns lights on / off with a fade (Interact input, or walking over it).") },

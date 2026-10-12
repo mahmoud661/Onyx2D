@@ -24,7 +24,7 @@ FName UOnyxMoveset::FindRole(const UOnyxClip* Clip) const
 
 const TArray<FName>& UOnyxMoveset::GetStandardRoles()
 {
-	static const TArray<FName> Roles = { TEXT("Idle"), TEXT("Run"), TEXT("Jump"), TEXT("Fall"), TEXT("Crouch"), TEXT("Dash"), TEXT("WallSlide"),
+	static const TArray<FName> Roles = { TEXT("Idle"), TEXT("Run"), TEXT("Jump"), TEXT("Fall"), TEXT("Crouch"), TEXT("Dash"), TEXT("WallSlide"), TEXT("Swim"),
 		TEXT("Attack1"), TEXT("Attack2"), TEXT("Attack3"), TEXT("Hurt"), TEXT("Death") };
 	return Roles;
 }

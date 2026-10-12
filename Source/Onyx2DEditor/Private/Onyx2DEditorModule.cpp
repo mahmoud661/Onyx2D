@@ -129,6 +129,10 @@ public:
 			OpenCommand = nullptr;
 		}
 		FCoreDelegates::GetOnPostEngineInit().Remove(PostEngineInitHandle);
+		if (FLevelEditorModule* LevelEditor = FModuleManager::GetModulePtr<FLevelEditorModule>("LevelEditor"))
+		{
+			LevelEditor->OnMapChanged().Remove(MapChangedHandle);
+		}
 		if (GEditor)
 		{
 			if (UImportSubsystem* ImportSubsystem = GEditor->GetEditorSubsystem<UImportSubsystem>())
@@ -538,6 +542,49 @@ private:
 		{
 			FOnyxMaterialBuilder::EnsureMaterials(false);
 		}
+
+		// 2D levels open in the side view: the one opened at startup, and every one opened after.
+		if (FLevelEditorModule* LevelEditor = FModuleManager::GetModulePtr<FLevelEditorModule>("LevelEditor"))
+		{
+			MapChangedHandle = LevelEditor->OnMapChanged().AddLambda([this](UWorld* World, EMapChangeType Change)
+			{
+				if (Change == EMapChangeType::LoadMap)
+				{
+					QueueSideView();
+				}
+			});
+		}
+		QueueSideView();
+	}
+
+	/**
+	 * Shows the open level in the side view once the level viewports exist and have restored their own cameras (they
+	 * do that when the map changes too, so this waits a moment).
+	 */
+	void QueueSideView()
+	{
+		if (!UOnyx2DSettings::Get()->bOpenLevelsInSideView || bSideViewQueued || IsRunningCommandlet())
+		{
+			return;
+		}
+		bSideViewQueued = true;
+		TSharedRef<int32> Frames = MakeShared<int32>(0);
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, Frames](float) -> bool
+		{
+			++*Frames;
+			if (!GEditor || GEditor->GetLevelViewportClients().IsEmpty() || *Frames < 3)
+			{
+				bSideViewQueued = *Frames < 600; // keep waiting for the viewports, but not forever
+				return bSideViewQueued;
+			}
+			bSideViewQueued = false;
+			UWorld* World = FOnyxLevelTools::GetEditorWorld();
+			if (FOnyxLevelTools::IsLevel2D(World))
+			{
+				FOnyxLevelTools::ShowSideView(FOnyxLevelTools::GetLevelBounds2D(World));
+			}
+			return false;
+		}));
 	}
 
 	void HandleAssetPostImport(UFactory* Factory, UObject* Object)
@@ -552,6 +599,8 @@ private:
 	TWeakPtr<SOnyxToolsWindow> ToolkitWidget;
 	FDelegateHandle PostEngineInitHandle;
 	FDelegateHandle PostImportHandle;
+	FDelegateHandle MapChangedHandle;
+	bool bSideViewQueued = false;
 	FOnyxEditorLightingView LightingView;
 	IConsoleObject* OpenCommand = nullptr;
 	IConsoleObject* CaptureCommand = nullptr;
