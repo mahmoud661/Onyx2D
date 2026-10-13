@@ -20,7 +20,10 @@
 #include "Core/OnyxPlayerController.h"
 #include "Editor.h"
 #include "Engine/Blueprint.h"
+#include "Examples/OnyxStarterGame.h"
+#include "Examples/OnyxLearnExample.h"
 #include "Examples/OnyxSunnyLandExample.h"
+#include "Misc/MessageDialog.h"
 #include "FileHelpers.h"
 #include "Framework/Application/SlateApplication.h"
 #include "GameProjectGenerationModule.h"
@@ -132,10 +135,21 @@ TSharedRef<SWidget> SOnyxHomeTool::MakeHeader()
 		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
 		[
-			Button(INVTEXT("README"), INVTEXT("Open the plugin documentation."), []()
-			{
-				FPlatformProcess::LaunchFileInDefaultExternalApplication(*(PluginDir() / TEXT("README.md")));
-			})
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				Button(INVTEXT("Documentation"), INVTEXT("Open the Onyx2D documentation in your browser (Project Settings > Onyx2D > Docs Url)."), []()
+				{
+					OpenDocs(FString());
+				}, true)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(4.f, 0.f, 0.f, 0.f)
+			[
+				Button(INVTEXT("README"), INVTEXT("Open the plugin README."), []()
+				{
+					FPlatformProcess::LaunchFileInDefaultExternalApplication(*(PluginDir() / TEXT("README.md")));
+				})
+			]
 		];
 }
 
@@ -232,7 +246,7 @@ TSharedRef<SWidget> SOnyxHomeTool::MakeSteps()
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
 		[
 			MakeStep(3, INVTEXT("Set up a level"),
-				INVTEXT("Open or create a level, then add what a 2D level needs: game mode, player start, camera bounds, lighting, tile collision."),
+				INVTEXT("Open or create a level, then add what a 2D level needs: game mode, player start, lighting, level audio, tile collision."),
 				Actions({ Button(INVTEXT("Set Up Level"), INVTEXT("Set Up Level for 2D (safe to press again)"), []()
 				{
 					const TArray<FString> Added = FOnyxLevelTools::SetupCurrentLevel();
@@ -266,7 +280,31 @@ TSharedRef<SWidget> SOnyxHomeTool::MakeSteps()
 						}
 					}, true) }))
 		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 4.f)
+		[
+			MakeStep(0, INVTEXT("Or start from a small finished game"),
+				INVTEXT("Builds the Starter Game with the Sunny Land art: a meadow with a tutorial sign, a frog to talk to, enemies, a key, a locked gate and a main menu. All of it is Trigger Zones, Signs and the Talk behaviour: open any piece to see how it works."),
+				Actions({ Button(INVTEXT("Build Starter Game"), INVTEXT("Build and open the Starter Game"), []()
+				{
+					const EAppReturnType::Type Answer = FMessageDialog::Open(EAppMsgType::YesNoCancel,
+						INVTEXT("Also make the Starter Game what your game opens with?\n\nYes sets its main menu and first level in Project Settings > Onyx2D UI, and its main menu as the game's default map. No only builds it (in Content/StarterGame)."),
+						INVTEXT("Build Starter Game"));
+					if (Answer == EAppReturnType::Cancel)
+					{
+						return;
+					}
+					FText Error;
+					if (FOnyxStarterGame::Build(Answer == EAppReturnType::Yes, Error))
+					{
+						Notify(INVTEXT("Starter Game built: press Play"), true);
+					}
+					else
+					{
+						Notify(Error, false);
+					}
+				}, true) }))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 0.f)
 		[
 			MakeStep(0, INVTEXT("Or see a finished level first"),
 				INVTEXT("Builds the Sunny Land example (art shipped with the plugin): animated fox, enemies, pickups, the original map, 2D lighting and a torch-lit cave."),
@@ -277,6 +315,24 @@ TSharedRef<SWidget> SOnyxHomeTool::MakeSteps()
 					{
 						FEditorFileUtils::LoadMap(FPackageName::LongPackageNameToFilename(FOnyxSunnyLandExample::LevelPath, FPackageName::GetMapPackageExtension()));
 						Notify(INVTEXT("Sunny Land example built: press Play"), true);
+					}
+					else
+					{
+						Notify(Error, false);
+					}
+				}) }))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 0.f)
+		[
+			MakeStep(0, INVTEXT("Learning Unreal?"),
+				INVTEXT("Builds what the docs' Learn Unreal pages make, finished, in Content/LearnUnreal: a first Blueprint, a spring pad Blueprint with its node graph, Onyx2D's controls as Enhanced Input assets, a small playground level, and LU_Talking, where a lever, a door and a lamp talk to each other. Open them next to the pages to compare with your own."),
+				Actions({ Button(INVTEXT("Build Learn Unreal Examples"), INVTEXT("Build the Learn Unreal examples and open the playground level"), []()
+				{
+					FText Error;
+					if (FOnyxLearnExample::BuildWithSunnyLand(Error))
+					{
+						FEditorFileUtils::LoadMap(FPackageName::LongPackageNameToFilename(FOnyxLearnExample::LevelPath, FPackageName::GetMapPackageExtension()));
+						Notify(INVTEXT("Learn Unreal examples built in Content/LearnUnreal"), true);
 					}
 					else
 					{

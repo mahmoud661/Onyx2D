@@ -7,6 +7,7 @@
 #include "OnyxUISettings.generated.h"
 
 class UFont;
+class UOnyxDialogueWidget;
 class UOnyxHUDWidget;
 class UOnyxMainMenu;
 class UOnyxPauseMenu;
@@ -108,4 +109,8 @@ public:
 
 	UPROPERTY(Config, EditAnywhere, Category = "Screens")
 	TSoftClassPtr<UOnyxHUDWidget> HUDClass;
+
+	/** Messages and the conversation box (in every level but the main menu). */
+	UPROPERTY(Config, EditAnywhere, Category = "Screens")
+	TSoftClassPtr<UOnyxDialogueWidget> DialogueClass;
 };

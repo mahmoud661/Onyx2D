@@ -286,7 +286,8 @@ FOnyxCharacterBuildResult FOnyxCharacterBuilder::Build(const FOnyxCharacterSpec&
 		FOnyxAssetUtils::ConfigurePixelArtTexture(Texture);
 		Packages.Add(Texture->GetPackage());
 
-		const TArray<FIntRect> Rects = GetFrameRects(Spec, ClipSpec);
+		// Each clip's frames end at its feet line: the bottom pivot is then where the character stands.
+		const TArray<FIntRect> Rects = FOnyxImageAnalysis::CropToFeet(Texture, GetFrameRects(Spec, ClipSpec));
 		if (Rects.IsEmpty())
 		{
 			Result.Warnings.Add(FString::Printf(TEXT("%s: row %d has no frames inside the texture, skipped."), *ClipSpec.Name.ToString(), ClipSpec.Row));
@@ -415,10 +416,11 @@ FOnyxCharacterBuildResult FOnyxCharacterBuilder::Build(const FOnyxCharacterSpec&
 
 	if (UPaperFlipbookComponent* SpriteComponent = Defaults->GetSprite())
 	{
+		// The frames end at the feet (CropToFeet), so the sprite's bottom goes on the capsule's bottom.
 		SpriteComponent->Modify();
 		SpriteComponent->SetFlipbook(IdleFlipbook ? IdleFlipbook : FirstFlipbook);
 		const float HalfHeight = Defaults->GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight();
-		SpriteComponent->SetRelativeLocation(FVector(0.f, 0.f, -HalfHeight - PixelsBelowFeet * Spec.CentimetersPerPixel));
+		SpriteComponent->SetRelativeLocation(FVector(0.f, 0.f, -HalfHeight));
 	}
 
 	// Behaviours are components; a camera keeps every art pixel whole on screen at this character's pixel size.

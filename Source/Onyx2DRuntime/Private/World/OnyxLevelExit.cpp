@@ -28,7 +28,7 @@ AOnyxLevelExit::AOnyxLevelExit()
 	Visual = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Visual"));
 	Visual->SetupAttachment(Trigger);
 	Visual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	Visual->SetRelativeLocation(FVector(0.f, -60.f, 0.f));
+	// On the gameplay plane like everything else: the draw order keeps the player in front of the door.
 	Visual->SetRelativeScale3D(FVector(0.9f, 0.1f, 1.8f));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	Visual->SetStaticMesh(Cube.Object);

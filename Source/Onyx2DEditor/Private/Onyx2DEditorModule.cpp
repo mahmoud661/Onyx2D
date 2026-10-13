@@ -17,6 +17,7 @@
 #include "Builders/OnyxFramePacker.h"
 #include "Builders/OnyxMaterialBuilder.h"
 #include "Examples/OnyxSunnyLandExample.h"
+#include "Examples/OnyxLearnExample.h"
 #include "FileHelpers.h"
 #include "Level/OnyxMapPainter.h"
 #include "Builders/OnyxTilePadding.h"
@@ -355,7 +356,7 @@ private:
 		AddTool("Level", INVTEXT("Level"), INVTEXT("Place actors and check the level"), "Onyx2D.Tab.Level", SOnyxToolsWindow::LevelTabId);
 
 		FToolMenuSection& Actions = Menu->AddSection("Actions", INVTEXT("Quick Actions"));
-		Actions.AddMenuEntry("SetupLevel", INVTEXT("Set Up Level for 2D"), INVTEXT("Add game mode, camera bounds, player start and lights where missing."),
+		Actions.AddMenuEntry("SetupLevel", INVTEXT("Set Up Level for 2D"), INVTEXT("Adds the Onyx game mode, a player start, Onyx lighting and level audio where missing, and tile collision to tile maps."),
 			FOnyxEditorStyle::Icon("Onyx2D.Tab.Level"), FUIAction(FExecuteAction::CreateLambda([]()
 			{
 				const TArray<FString> Added = FOnyxLevelTools::SetupCurrentLevel();
@@ -389,6 +390,22 @@ private:
 				{
 					FEditorFileUtils::LoadMap(FPackageName::LongPackageNameToFilename(FOnyxSunnyLandExample::LevelPath, FPackageName::GetMapPackageExtension()));
 					OnyxTools::Notify(INVTEXT("Sunny Land example built: press Play"), true);
+				}
+				else
+				{
+					OnyxTools::Notify(Error, false);
+				}
+			})));
+		Examples.AddMenuEntry("BuildLearnUnreal", INVTEXT("Build Learn Unreal Examples"),
+			INVTEXT("Builds what the docs' Learn Unreal pages make, finished, in Content/LearnUnreal (a first Blueprint, a spring pad, the controls as input assets, a playground level and LU_Talking, where a lever, a door and a lamp talk to each other). Opens the playground when done."),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Help"),
+			FUIAction(FExecuteAction::CreateLambda([]()
+			{
+				FText Error;
+				if (FOnyxLearnExample::BuildWithSunnyLand(Error))
+				{
+					FEditorFileUtils::LoadMap(FPackageName::LongPackageNameToFilename(FOnyxLearnExample::LevelPath, FPackageName::GetMapPackageExtension()));
+					OnyxTools::Notify(INVTEXT("Learn Unreal examples built in Content/LearnUnreal"), true);
 				}
 				else
 				{

@@ -123,7 +123,6 @@ void AOnyxCharacter::PostInitializeComponents()
 void AOnyxCharacter::BeginPlay()
 {
 	Super::BeginPlay();
-
 	if (bLitSprite)
 	{
 		UOnyx2DLibrary::ConfigureSpriteLighting(GetSprite(), bSpriteCastsShadow);
@@ -139,8 +138,21 @@ void AOnyxCharacter::BeginPlay()
 		Movement->OnWallJumped.AddUniqueDynamic(this, &AOnyxCharacter::HandleJumpSound);
 		Movement->OnDashed.AddUniqueDynamic(this, &AOnyxCharacter::HandleDashSound);
 		Movement->OnLandedEvent.AddUniqueDynamic(this, &AOnyxCharacter::HandleLandSound);
+		Movement->OnDrowning.AddUniqueDynamic(this, &AOnyxCharacter::HandleDrowning);
 	}
 	ApplyFacing();
+}
+
+void AOnyxCharacter::HandleDrowning()
+{
+	FOnyxDamageInfo Damage;
+	Damage.Amount = GetOnyxMovement() ? GetOnyxMovement()->SwimSettings.DrownDamage : 1.f;
+	Damage.DamageType = TEXT("Drowning");
+	Damage.bIgnoreInvulnerability = true; // the hurt flash's invulnerability must not stop drowning
+	if (Damage.Amount > 0.f)
+	{
+		Execute_ReceiveDamage(this, Damage);
+	}
 }
 
 void AOnyxCharacter::Tick(float DeltaSeconds)
@@ -154,6 +166,13 @@ void AOnyxCharacter::Tick(float DeltaSeconds)
 	if (!Combat->IsAttacking() && !Health->IsDead())
 	{
 		UpdateFacing();
+	}
+	// Leaning into the swimming direction (only when the movement's Max Lean allows it).
+	const float Lean = GetOnyxMovement() ? GetOnyxMovement()->GetSwimLean() : 0.f;
+	if (!FMath::IsNearlyEqual(Lean, SpriteLean, 0.05f))
+	{
+		SpriteLean = Lean;
+		ApplyFacing();
 	}
 	SnapSpriteToPixels();
 	CheckFallDeath();
@@ -205,7 +224,7 @@ void AOnyxCharacter::ApplyFacing()
 	if (UPaperFlipbookComponent* SpriteComponent = GetSprite())
 	{
 		const bool bShowRight = (Facing == EOnyxFacing::Right) != bArtFacesLeft;
-		SpriteComponent->SetRelativeRotation(FRotator(0.f, bShowRight ? 0.f : 180.f, 0.f));
+		SpriteComponent->SetRelativeRotation(FRotator(SpriteLean, bShowRight ? 0.f : 180.f, 0.f)); // pitch is relative to the facing
 	}
 	AttackHitbox->SetRelativeLocation(FVector(Sign * AttackReach, 0.f, 0.f));
 	Combat->FacingSign = Sign;

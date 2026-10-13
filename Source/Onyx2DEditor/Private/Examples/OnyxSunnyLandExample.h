@@ -5,6 +5,8 @@
 #include "CoreMinimal.h"
 
 class UPaperSprite;
+class UTexture2D;
+class UWorld;
 
 /**
  * Builds a complete, playable example from "Sunny Land" by ansimuz (CC0, opengameart.org/node/74142):
@@ -25,6 +27,8 @@ public:
 
 	/** One of the pack's props (PNG/environment/props/<Name>.png) as a lit sprite in /Game/SunnyLand/Props. */
 	static UPaperSprite* ImportProp(const FString& Name);
+	/** Sunny Land's sky and jungle behind the whole level (Back, Middle: its two background textures) and a sunny day. */
+	static void AddScenery(UWorld* World, UTexture2D* Back, UTexture2D* Middle);
 
 	static const TCHAR* LevelPath;
 	/** Assets the example makes. */

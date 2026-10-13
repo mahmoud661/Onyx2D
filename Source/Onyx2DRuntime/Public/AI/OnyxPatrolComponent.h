@@ -19,6 +19,10 @@ enum class EOnyxPatrolStyle : uint8
 	Fly
 };
 
+/**
+ * The Patrol behaviour: walks, hops or flies back and forth, turning at walls (and ledges), and can chase the player
+ * when they come close.
+ */
 UCLASS(ClassGroup = (Onyx2D), meta = (BlueprintSpawnableComponent))
 class ONYX2DRUNTIME_API UOnyxPatrolComponent : public UActorComponent
 {

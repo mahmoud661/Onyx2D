@@ -84,20 +84,9 @@ void UOnyxPauseMenu::BuildUI()
 	AddMenuEntry(Menu, INVTEXT("Settings"), [this]() { OpenSettings(); });
 	if (!UOnyxUISettings::Get()->MainMenuLevel.IsNull())
 	{
-		AddMenuEntry(Menu, INVTEXT("Main Menu"), [this]()
-		{
-			ShowConfirm(INVTEXT("Return to Main Menu?"), INVTEXT("Unsaved progress will be lost."), INVTEXT("LEAVE"), [this]()
-			{
-				UGameplayStatics::SetGamePaused(this, false);
-				UGameplayStatics::OpenLevelBySoftObjectPtr(this, UOnyxUISettings::Get()->MainMenuLevel);
-			});
-		});
+		AddMenuEntry(Menu, INVTEXT("Main Menu"), [this]() { ReturnToMainMenu(); });
 	}
-	AddMenuEntry(Menu, INVTEXT("Quit Game"), [this]()
-	{
-		ShowConfirm(INVTEXT("Quit Game?"), INVTEXT("Unsaved progress will be lost."), INVTEXT("QUIT"),
-			[this]() { UKismetSystemLibrary::QuitGame(this, GetOwningPlayer(), EQuitPreference::Quit, false); });
-	}, true);
+	AddMenuEntry(Menu, INVTEXT("Quit Game"), [this]() { RequestQuit(); }, true);
 
 	UHorizontalBox* Hints = Make<UHorizontalBox>();
 	Hints->AddChild(MakeKeyHint(INVTEXT("ENTER"), INVTEXT("Select")));
@@ -114,17 +103,62 @@ void UOnyxPauseMenu::BuildUI()
 	PauseMenuFill(Root->AddChildToOverlay(BuildDialogLayer()));
 }
 
+void UOnyxPauseMenu::NativeConstruct()
+{
+	Super::NativeConstruct();
+	// Decoration over the game: it must never take the clicks meant for the buttons.
+	if (Backdrop)
+	{
+		Backdrop->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+}
+
 void UOnyxPauseMenu::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+	// Each part is optional: a layout of its own may leave any of them out.
 	const float In = SmoothStep01(Age / 0.3f);
-	Blur->SetBlurStrength(PauseBlurStrength * In);
-	Backdrop->SetRenderOpacity(In);
-	const float HeadingIn = SmoothStep01(Age / 0.35f);
-	Heading->SetRenderOpacity(HeadingIn);
-	Heading->SetRenderTranslation(FVector2D(0.f, (1.f - HeadingIn) * 14.f));
-	Divider->SetRenderScale(FVector2D(FMath::Max(SmoothStep01((Age - 0.08f) / 0.45f), 0.001f), 1.f));
-	Footer->SetRenderOpacity(SmoothStep01((Age - 0.25f) / 0.4f));
+	if (Blur)
+	{
+		Blur->SetBlurStrength(PauseBlurStrength * In);
+	}
+	if (Backdrop)
+	{
+		Backdrop->SetRenderOpacity(In);
+	}
+	if (Heading)
+	{
+		const float HeadingIn = SmoothStep01(Age / 0.35f);
+		Heading->SetRenderOpacity(HeadingIn);
+		Heading->SetRenderTranslation(FVector2D(0.f, (1.f - HeadingIn) * 14.f));
+	}
+	if (Divider)
+	{
+		Divider->SetRenderScale(FVector2D(FMath::Max(SmoothStep01((Age - 0.08f) / 0.45f), 0.001f), 1.f));
+	}
+	if (Footer)
+	{
+		Footer->SetRenderOpacity(SmoothStep01((Age - 0.25f) / 0.4f));
+	}
+}
+
+void UOnyxPauseMenu::ReturnToMainMenu()
+{
+	if (UOnyxUISettings::Get()->MainMenuLevel.IsNull())
+	{
+		return;
+	}
+	ShowConfirm(INVTEXT("Return to Main Menu?"), INVTEXT("Unsaved progress will be lost."), INVTEXT("LEAVE"), [this]()
+	{
+		UGameplayStatics::SetGamePaused(this, false);
+		UGameplayStatics::OpenLevelBySoftObjectPtr(this, UOnyxUISettings::Get()->MainMenuLevel);
+	});
+}
+
+void UOnyxPauseMenu::RequestQuit()
+{
+	ShowConfirm(INVTEXT("Quit Game?"), INVTEXT("Unsaved progress will be lost."), INVTEXT("QUIT"),
+		[this]() { UKismetSystemLibrary::QuitGame(this, GetOwningPlayer(), EQuitPreference::Quit, false); });
 }
 
 FReply UOnyxPauseMenu::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)

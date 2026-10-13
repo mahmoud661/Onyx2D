@@ -20,6 +20,8 @@ struct FOnyxValidationIssue
 	FText FixLabel;
 	TFunction<void()> Fix;
 	TWeakObjectPtr<AActor> Actor;
+	/** Documentation page that explains it ("world/trigger-zones"), shown as a ? button. */
+	FString DocsPage;
 
 	bool HasFix() const { return (bool)Fix; }
 };

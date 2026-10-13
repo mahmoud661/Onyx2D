@@ -37,6 +37,27 @@ struct FOnyxStamp
 	FPaperTileInfo GetTile(int32 X, int32 Y, const FIntPoint& Cell = FIntPoint::ZeroValue) const;
 };
 
+/** Cells added to (positive) or removed from (negative) each edge of a tile map. */
+struct FOnyxMapEdges
+{
+	int32 Left = 0;
+	int32 Top = 0;
+	int32 Right = 0;
+	int32 Bottom = 0;
+
+	bool IsZero() const { return Left == 0 && Top == 0 && Right == 0 && Bottom == 0; }
+	/** The map size after the change. */
+	FIntPoint Apply(const FIntPoint& Size) const { return FIntPoint(Size.X + Left + Right, Size.Y + Top + Bottom); }
+	/** From one size to another keeping the bottom-left corner (the ground of a side-on level): columns come and go on the right, rows at the top. */
+	static FOnyxMapEdges KeepBottomLeft(const FIntPoint& From, const FIntPoint& To)
+	{
+		FOnyxMapEdges Edges;
+		Edges.Right = To.X - From.X;
+		Edges.Top = To.Y - From.Y;
+		return Edges;
+	}
+};
+
 /** A placed object as seen by the painter. */
 struct FOnyxPlacedObject
 {
@@ -71,7 +92,20 @@ public:
 	FVector CellToWorld(const FIntPoint& Cell) const;
 	/** A world position as map pixels from the map's top-left corner (tile pixels, not rounded): draws actors where they really are. */
 	FVector2D WorldToMapPixels(const FVector& Location) const;
+	/** Where the map's top-left corner is in the level (unset when the map isn't in the level). */
+	TOptional<FVector> GetMapCornerInLevel() const;
+
+	/** Largest map side, in cells. */
+	static constexpr int32 MaxMapSize = 1024;
+	/** Changes the size keeping the bottom-left corner, so the ground stays put (see ResizeEdges). */
 	void Resize(const FIntPoint& NewSize);
+	/**
+	 * Grows (or shrinks) the map from any of its edges, at any time. What is already there stays where it is in the
+	 * level: when cells are added on the left or top, the map actor moves out by as much, so painted tiles, objects,
+	 * water and zones keep their places. Cells cut off are lost (one undo step brings them back).
+	 * False when nothing changes or the size would leave 1..MaxMapSize.
+	 */
+	bool ResizeEdges(const FOnyxMapEdges& Edges);
 
 	// --- Tile layers -----------------------------------------------------------------------
 	int32 GetLayer() const { return Layer; }
@@ -132,10 +166,12 @@ public:
 	bool SetAreaCells(AActor* Actor, const FIntRect& Cells);
 	void ForEachObject(TFunctionRef<void(const FOnyxPlacedObject&)> Visit) const;
 	static FName GetObjectLayer(const AActor* Actor);
-	/** Depth (Y) objects of an object layer are placed at: behind the tiles, on the gameplay plane or in front. */
+	/** Depth (Y) objects of an object layer are placed at: the gameplay plane, for all of them (the draw order sorts them). */
 	static float GetObjectLayerDepth(FName ObjectLayer);
 
 private:
+	/** Every level actor showing this map (usually one). */
+	TArray<APaperTileMapActor*> FindMapActors() const;
 	UPaperTileLayer* GetTileLayer(int32 LayerIndex) const;
 	void TouchLayer(UPaperTileLayer* TileLayer);
 	void ChangeMapStructure(const FText& Description, TFunctionRef<void(UPaperTileMap&)> Change);

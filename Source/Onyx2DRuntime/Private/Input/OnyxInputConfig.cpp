@@ -32,6 +32,7 @@ UOnyxInputConfig* UOnyxInputConfig::CreateDefault(UObject* Outer)
 {
 	UOnyxInputConfig* Config = NewObject<UOnyxInputConfig>(Outer, TEXT("OnyxDefaultInput"));
 	Config->Move = MakeAction(Config, TEXT("IA_Move"), TEXT("Move"), EInputActionValueType::Axis1D);
+	Config->Vertical = MakeAction(Config, TEXT("IA_Vertical"), TEXT("Swim Up / Down"), EInputActionValueType::Axis1D);
 	Config->Jump = MakeAction(Config, TEXT("IA_Jump"), TEXT("Jump"), EInputActionValueType::Boolean);
 	Config->Dash = MakeAction(Config, TEXT("IA_Dash"), TEXT("Dash"), EInputActionValueType::Boolean);
 	Config->Attack = MakeAction(Config, TEXT("IA_Attack"), TEXT("Attack"), EInputActionValueType::Boolean);
@@ -49,6 +50,9 @@ UOnyxInputConfig* UOnyxInputConfig::CreateDefault(UObject* Outer)
 	Map(Context, Config->Move, EKeys::Gamepad_LeftX);
 	Map(Context, Config->Move, EKeys::Gamepad_DPad_Right);
 	Map(Context, Config->Move, EKeys::Gamepad_DPad_Left, true);
+
+	Map(Context, Config->Vertical, EKeys::Gamepad_LeftY);
+	Map(Context, Config->Vertical, EKeys::Gamepad_DPad_Up);
 
 	Map(Context, Config->Jump, EKeys::SpaceBar);
 	Map(Context, Config->Jump, EKeys::W);

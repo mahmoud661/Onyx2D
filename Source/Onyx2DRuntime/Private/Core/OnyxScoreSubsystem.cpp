@@ -18,8 +18,61 @@ void UOnyxScoreSubsystem::AddCoins(int32 Amount)
 	OnCoinsChanged.Broadcast(Coins);
 }
 
+bool UOnyxScoreSubsystem::SpendCoins(int32 Amount)
+{
+	if (Amount > Coins)
+	{
+		return false;
+	}
+	AddCoins(-Amount);
+	return true;
+}
+
 void UOnyxScoreSubsystem::ResetCoins()
 {
 	Coins = 0;
 	OnCoinsChanged.Broadcast(Coins);
+}
+
+void UOnyxScoreSubsystem::AddItem(FName Item, int32 Count)
+{
+	if (!Item.IsNone())
+	{
+		SetItemCount(Item, GetItemCount(Item) + Count);
+	}
+}
+
+bool UOnyxScoreSubsystem::UseItem(FName Item, int32 Count)
+{
+	if (!HasItem(Item, Count))
+	{
+		return false;
+	}
+	SetItemCount(Item, GetItemCount(Item) - Count);
+	return true;
+}
+
+void UOnyxScoreSubsystem::SetItemCount(FName Item, int32 Count)
+{
+	Count = FMath::Max(Count, 0);
+	if (Count == 0)
+	{
+		Items.Remove(Item);
+	}
+	else
+	{
+		Items.Add(Item, Count);
+	}
+	OnItemsChanged.Broadcast(Item, Count);
+}
+
+void UOnyxScoreSubsystem::ResetAll()
+{
+	ResetCoins();
+	TArray<FName> Held;
+	Items.GetKeys(Held);
+	for (const FName Item : Held)
+	{
+		SetItemCount(Item, 0);
+	}
 }

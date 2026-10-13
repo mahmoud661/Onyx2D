@@ -47,6 +47,8 @@ namespace
 		FName Icon;
 		/** Sidebar group: 0 Start, 1 Create, 2 Level. */
 		int32 Group;
+		/** Its documentation page. */
+		const TCHAR* DocsPage;
 	};
 
 	const FText GroupNames[] = { INVTEXT("START"), INVTEXT("CREATE"), INVTEXT("LEVEL") };
@@ -55,14 +57,14 @@ namespace
 	const TArray<FToolInfo>& GetTools()
 	{
 		static const TArray<FToolInfo> Tools = {
-			{ SOnyxToolsWindow::HomeTabId, INVTEXT("Home"), INVTEXT("Where to start: the steps from art to a playable level, and how to extend Onyx2D with Blueprints or C++."), "Onyx2D.Tab.Home", 0 },
-			{ SOnyxToolsWindow::ImportTabId, INVTEXT("Import"), INVTEXT("Drop PNGs or folders: tile sets, characters, sprites and backgrounds are built for you."), "Onyx2D.Tab.Import", 0 },
-			{ SOnyxToolsWindow::LibraryTabId, INVTEXT("Library"), INVTEXT("Browse and preview the project's characters, enemies, tile sets and animations; place them in the level."), "Onyx2D.Tab.Library", 0 },
-			{ SOnyxToolsWindow::AnimationsTabId, INVTEXT("Movesets"), INVTEXT("Moveset Editor: cut clips from sprite sheets, timeline with frame durations and events (messages, sounds, effects), make characters."), "Onyx2D.Tab.Animations", 1 },
-			{ SOnyxToolsWindow::TilesTabId, INVTEXT("Tiles"), INVTEXT("Create tile sets and tile maps."), "Onyx2D.Tab.Tiles", 1 },
-			{ SOnyxToolsWindow::PainterTabId, INVTEXT("Level Painter"), INVTEXT("Paint tiles and place entities, LDtk style."), "Onyx2D.Tab.Painter", 2 },
-			{ SOnyxToolsWindow::ParallaxTabId, INVTEXT("Parallax"), INVTEXT("Build the level's parallax background."), "Onyx2D.Tab.Parallax", 2 },
-			{ SOnyxToolsWindow::LevelTabId, INVTEXT("Level"), INVTEXT("Set up, populate and check the level."), "Onyx2D.Tab.Level", 2 },
+			{ SOnyxToolsWindow::HomeTabId, INVTEXT("Home"), INVTEXT("Where to start: the steps from art to a playable level, and how to extend Onyx2D with Blueprints or C++."), "Onyx2D.Tab.Home", 0, TEXT("getting-started/quick-start") },
+			{ SOnyxToolsWindow::ImportTabId, INVTEXT("Import"), INVTEXT("Drop PNGs or folders: tile sets, characters, sprites and backgrounds are built for you."), "Onyx2D.Tab.Import", 0, TEXT("getting-started/tools-window#import") },
+			{ SOnyxToolsWindow::LibraryTabId, INVTEXT("Library"), INVTEXT("Browse and preview the project's characters, enemies, tile sets and animations; place them in the level."), "Onyx2D.Tab.Library", 0, TEXT("getting-started/tools-window#library") },
+			{ SOnyxToolsWindow::AnimationsTabId, INVTEXT("Movesets"), INVTEXT("Moveset Editor: cut clips from sprite sheets, timeline with frame durations and events (messages, sounds, effects), make characters."), "Onyx2D.Tab.Animations", 1, TEXT("animation/moveset-editor") },
+			{ SOnyxToolsWindow::TilesTabId, INVTEXT("Tiles"), INVTEXT("Create tile sets and tile maps."), "Onyx2D.Tab.Tiles", 1, TEXT("levels/tiles-collision") },
+			{ SOnyxToolsWindow::PainterTabId, INVTEXT("Level Painter"), INVTEXT("Paint tiles and place entities, LDtk style."), "Onyx2D.Tab.Painter", 2, TEXT("levels/level-painter") },
+			{ SOnyxToolsWindow::ParallaxTabId, INVTEXT("Parallax"), INVTEXT("Build the level's parallax background."), "Onyx2D.Tab.Parallax", 2, TEXT("levels/parallax") },
+			{ SOnyxToolsWindow::LevelTabId, INVTEXT("Level"), INVTEXT("Set up, populate and check the level."), "Onyx2D.Tab.Level", 2, TEXT("getting-started/tools-window#level") },
 		};
 		return Tools;
 	}
@@ -218,6 +220,24 @@ TSharedRef<SWidget> SOnyxToolsWindow::MakeSidebar()
 				+ SVerticalBox::Slot().FillHeight(1.f)
 				[
 					SNew(SScrollBox) + SScrollBox::Slot()[Items]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 0.f)
+				[
+					FooterButton(INVTEXT("Help"), INVTEXT("Open the documentation for the tool in front (opens your browser)."),
+						[]() { return FName("Icons.Help"); },
+						[this]()
+						{
+							FString Page = TEXT("getting-started/tools-window");
+							for (const FToolInfo& Tool : GetTools())
+							{
+								if (IsTabInFront(Tool.Id))
+								{
+									Page = Tool.DocsPage;
+									break;
+								}
+							}
+							OnyxTools::OpenDocs(Page);
+						})
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
 				[

@@ -8,6 +8,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Input/OnyxInputConfig.h"
+#include "Logic/OnyxDialogueSubsystem.h"
 #include "Movement/OnyxMovementComponent.h"
 #include "World/OnyxInteractable.h"
 
@@ -61,6 +62,11 @@ void UOnyxPlayerControlComponent::BindTo(AController* Controller)
 		InputComponent->BindAction(Config->Move, ETriggerEvent::Triggered, this, &UOnyxPlayerControlComponent::HandleMove);
 		InputComponent->BindAction(Config->Move, ETriggerEvent::Completed, this, &UOnyxPlayerControlComponent::HandleMoveReleased);
 	}
+	if (Config->Vertical)
+	{
+		InputComponent->BindAction(Config->Vertical, ETriggerEvent::Triggered, this, &UOnyxPlayerControlComponent::HandleVertical);
+		InputComponent->BindAction(Config->Vertical, ETriggerEvent::Completed, this, &UOnyxPlayerControlComponent::HandleVertical);
+	}
 	if (Config->Jump)
 	{
 		InputComponent->BindAction(Config->Jump, ETriggerEvent::Started, this, &UOnyxPlayerControlComponent::HandleJumpPressed);
@@ -105,16 +111,33 @@ void UOnyxPlayerControlComponent::Unbind()
 bool UOnyxPlayerControlComponent::CanAct() const
 {
 	const UOnyxHealthComponent* Health = GetOwner()->FindComponentByClass<UOnyxHealthComponent>();
-	return bControlEnabled && !(Health && Health->IsDead());
+	const UOnyxDialogueSubsystem* Dialogue = UOnyxDialogueSubsystem::Get(this);
+	return bControlEnabled && !(Health && Health->IsDead()) && !(Dialogue && Dialogue->IsTalking());
+}
+
+bool UOnyxPlayerControlComponent::AdvanceDialogue() const
+{
+	UOnyxDialogueSubsystem* Dialogue = UOnyxDialogueSubsystem::Get(this);
+	if (!Dialogue || !Dialogue->IsTalking())
+	{
+		return false;
+	}
+	Dialogue->Advance();
+	return true;
 }
 
 void UOnyxPlayerControlComponent::ReleaseHeldInput()
 {
 	MoveInput = 0.f;
+	UOnyxMovementComponent* Movement = GetOwner() ? GetOwner()->FindComponentByClass<UOnyxMovementComponent>() : nullptr;
+	if (Movement)
+	{
+		Movement->SetVerticalInput(0.f);
+	}
 	if (bDownHeld)
 	{
 		bDownHeld = false;
-		if (UOnyxMovementComponent* Movement = GetOwner() ? GetOwner()->FindComponentByClass<UOnyxMovementComponent>() : nullptr)
+		if (Movement)
 		{
 			Movement->SetCrouchHeld(false);
 		}
@@ -135,8 +158,21 @@ void UOnyxPlayerControlComponent::HandleMoveReleased(const FInputActionValue& Va
 	MoveInput = 0.f;
 }
 
+void UOnyxPlayerControlComponent::HandleVertical(const FInputActionValue& Value)
+{
+	// Completed events carry zero: the stick is back in the middle.
+	if (UOnyxMovementComponent* Movement = GetOwner()->FindComponentByClass<UOnyxMovementComponent>())
+	{
+		Movement->SetVerticalInput(CanAct() ? Value.Get<float>() : 0.f);
+	}
+}
+
 void UOnyxPlayerControlComponent::HandleJumpPressed(const FInputActionValue& Value)
 {
+	if (AdvanceDialogue())
+	{
+		return;
+	}
 	UOnyxMovementComponent* Movement = GetOwner()->FindComponentByClass<UOnyxMovementComponent>();
 	if (!Movement || !CanAct() || (bDownHeld && Movement->TryDropThroughPlatform()))
 	{
@@ -192,23 +228,31 @@ void UOnyxPlayerControlComponent::HandleDownReleased(const FInputActionValue& Va
 	}
 }
 
-AActor* UOnyxPlayerControlComponent::FindInteractable() const
+UObject* UOnyxPlayerControlComponent::FindInteractable() const
 {
 	AActor* Owner = GetOwner();
-	TArray<AActor*> Touching;
-	Owner->GetOverlappingActors(Touching);
-	AActor* Best = nullptr;
+	TArray<UPrimitiveComponent*> Touching;
+	Owner->GetOverlappingComponents(Touching);
+	UObject* Best = nullptr;
 	double BestDistance = TNumericLimits<double>::Max();
-	for (AActor* Candidate : Touching)
+	for (UPrimitiveComponent* Component : Touching)
 	{
-		if (Candidate && Candidate->Implements<UOnyxInteractable>() && !IOnyxInteractable::Execute_IsInteractionLocked(Candidate, Owner))
+		AActor* Other = Component ? Component->GetOwner() : nullptr;
+		if (!Other || Other == Owner)
 		{
-			const double Distance = FVector::DistSquared(Candidate->GetActorLocation(), Owner->GetActorLocation());
-			if (Distance < BestDistance)
-			{
-				BestDistance = Distance;
-				Best = Candidate;
-			}
+			continue;
+		}
+		// The component itself (an NPC's Talk range), else its actor (a lever, a sign, a door).
+		UObject* Candidate = Component->Implements<UOnyxInteractable>() ? static_cast<UObject*>(Component) : static_cast<UObject*>(Other);
+		if (!Candidate->Implements<UOnyxInteractable>() || IOnyxInteractable::Execute_IsInteractionLocked(Candidate, Owner))
+		{
+			continue;
+		}
+		const double Distance = FVector::DistSquared(Component->GetComponentLocation(), Owner->GetActorLocation());
+		if (Distance < BestDistance)
+		{
+			BestDistance = Distance;
+			Best = Candidate;
 		}
 	}
 	return Best;
@@ -216,11 +260,11 @@ AActor* UOnyxPlayerControlComponent::FindInteractable() const
 
 void UOnyxPlayerControlComponent::HandleInteract(const FInputActionValue& Value)
 {
-	if (!CanAct())
+	if (AdvanceDialogue() || !CanAct())
 	{
 		return;
 	}
-	if (AActor* Target = FindInteractable())
+	if (UObject* Target = FindInteractable())
 	{
 		IOnyxInteractable::Execute_Interact(Target, GetOwner());
 		return;

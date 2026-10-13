@@ -7,6 +7,7 @@
 #include "Character/OnyxRespawnComponent.h"
 #include "Combat/OnyxContactDamageComponent.h"
 #include "Combat/OnyxStompableComponent.h"
+#include "Character/OnyxTalkComponent.h"
 #include "Components/SceneComponent.h"
 #include "GameFramework/Actor.h"
 
@@ -20,6 +21,7 @@ UClass* UOnyxBehaviourLibrary::GetComponentClass(EOnyxBehaviour Behaviour)
 	case EOnyxBehaviour::Patrol: return UOnyxPatrolComponent::StaticClass();
 	case EOnyxBehaviour::ContactDamage: return UOnyxContactDamageComponent::StaticClass();
 	case EOnyxBehaviour::Stompable: return UOnyxStompableComponent::StaticClass();
+	case EOnyxBehaviour::Talk: return UOnyxTalkComponent::StaticClass();
 	default: return nullptr;
 	}
 }
@@ -27,7 +29,7 @@ UClass* UOnyxBehaviourLibrary::GetComponentClass(EOnyxBehaviour Behaviour)
 const TArray<EOnyxBehaviour>& UOnyxBehaviourLibrary::GetAll()
 {
 	static const TArray<EOnyxBehaviour> All = { EOnyxBehaviour::PlayerControl, EOnyxBehaviour::Camera, EOnyxBehaviour::Respawn,
-		EOnyxBehaviour::Patrol, EOnyxBehaviour::ContactDamage, EOnyxBehaviour::Stompable };
+		EOnyxBehaviour::Patrol, EOnyxBehaviour::ContactDamage, EOnyxBehaviour::Stompable, EOnyxBehaviour::Talk };
 	return All;
 }
 

@@ -159,17 +159,25 @@ namespace
 						SNew(STextBlock).Text(Issue->Message).AutoWrapText(true)
 					];
 			}
-			if (!Issue->HasFix())
+			TSharedRef<SHorizontalBox> Buttons = SNew(SHorizontalBox);
+			if (Issue->HasFix())
 			{
-				return SNullWidget::NullWidget;
-			}
-			return SNew(SBox).VAlign(VAlign_Center).Padding(FMargin(4.f, 0.f))
+				Buttons->AddSlot().FillWidth(1.f).VAlign(VAlign_Center)
 				[
 					SNew(SButton)
 					.Text(Issue->FixLabel)
 					.HAlign(HAlign_Center)
 					.OnClicked_Lambda([this]() { OnFix(); return FReply::Handled(); })
 				];
+			}
+			if (!Issue->DocsPage.IsEmpty())
+			{
+				Buttons->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(4.f, 0.f, 0.f, 0.f)
+				[
+					OnyxTools::HelpButton(Issue->DocsPage, INVTEXT("Learn more about this in the documentation"))
+				];
+			}
+			return SNew(SBox).VAlign(VAlign_Center).Padding(FMargin(4.f, 0.f))[Buttons];
 		}
 
 	private:
@@ -259,7 +267,7 @@ TSharedRef<SWidget> SOnyxLevelTool::MakeToolbar()
 		Notify(Added.IsEmpty() ? INVTEXT("The level was already set up.") : FText::FromString(TEXT("Added: ") + FString::Join(Added, TEXT(", "))), true);
 		RunValidation();
 	})), NAME_None, INVTEXT("Set Up Level"),
-		INVTEXT("Add what a 2D level needs: Onyx game mode, camera bounds, player start, 2D light, moon light and ambient light. Safe to press again."),
+		INVTEXT("Add what a 2D level needs: the Onyx game mode, a player start, Onyx lighting, level audio and tile collision. Safe to press again."),
 		FOnyxEditorStyle::Icon("Onyx2D.Tab.Level"));
 	Toolbar.AddToolBarButton(FUIAction(FExecuteAction::CreateLambda([this]()
 	{

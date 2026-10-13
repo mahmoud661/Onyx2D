@@ -28,4 +28,12 @@ public:
 
 	/** Union of the visible pixels of every frame, relative to each frame's top-left corner. */
 	static TOptional<FIntRect> VisibleBounds(UTexture2D* Texture, const TArray<FIntRect>& Frames);
+
+	/**
+	 * The frames without the transparent rows under their feet: every frame loses the rows that all of them have empty
+	 * below their lowest visible pixel, so the feet line becomes the bottom edge while the frames keep their motion
+	 * relative to each other. A sprite cut from such a frame with a bottom pivot stands exactly on its feet.
+	 * Pass all the frames of one animation together (or a single frame for a single sprite).
+	 */
+	static TArray<FIntRect> CropToFeet(UTexture2D* Texture, const TArray<FIntRect>& Frames);
 };

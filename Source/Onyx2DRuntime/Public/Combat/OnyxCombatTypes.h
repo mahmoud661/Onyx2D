@@ -73,6 +73,7 @@ class UOnyxTeamMember : public UInterface
 	GENERATED_BODY()
 };
 
+/** Anything on a team. Attacks only hurt actors on other teams; Neutral (0) fights everyone. */
 class ONYX2DRUNTIME_API IOnyxTeamMember
 {
 	GENERATED_BODY()

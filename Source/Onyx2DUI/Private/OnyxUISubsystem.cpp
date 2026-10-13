@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "OnyxDialogueWidget.h"
 #include "OnyxHUDWidget.h"
 #include "OnyxMainMenu.h"
 #include "OnyxPauseMenu.h"
@@ -46,6 +47,7 @@ void UOnyxUISubsystem::PlayerControllerChanged(APlayerController* NewPlayerContr
 	HUD = nullptr;
 	PauseMenu = nullptr;
 	MainMenu = nullptr;
+	DialogueBox = nullptr;
 
 	UWorld* World = NewPlayerController ? NewPlayerController->GetWorld() : nullptr;
 	if (!World || !World->IsGameWorld())
@@ -78,9 +80,36 @@ void UOnyxUISubsystem::SetupForCurrentLevel()
 			ShowMainMenu();
 		}
 	}
-	else if (Settings->bAutoShowHUD)
+	else
 	{
-		ShowHUD();
+		if (Settings->bAutoShowHUD)
+		{
+			ShowHUD();
+		}
+		ShowDialogueBox();
+	}
+}
+
+void UOnyxUISubsystem::ShowDialogueBox()
+{
+	APlayerController* PC = GetPlayerController();
+	if (!PC || (DialogueBox && DialogueBox->IsInViewport()))
+	{
+		return;
+	}
+	DialogueBox = CreateWidget<UOnyxDialogueWidget>(PC, ResolveClass(UOnyxUISettings::Get()->DialogueClass));
+	if (DialogueBox)
+	{
+		DialogueBox->AddToViewport(5);
+	}
+}
+
+void UOnyxUISubsystem::HideDialogueBox()
+{
+	if (DialogueBox)
+	{
+		DialogueBox->RemoveFromParent();
+		DialogueBox = nullptr;
 	}
 }
 
@@ -92,6 +121,7 @@ void UOnyxUISubsystem::ShowMainMenu()
 		return;
 	}
 	HideHUD();
+	HideDialogueBox();
 	MainMenu = CreateWidget<UOnyxMainMenu>(PC, ResolveClass(UOnyxUISettings::Get()->MainMenuClass));
 	if (MainMenu)
 	{

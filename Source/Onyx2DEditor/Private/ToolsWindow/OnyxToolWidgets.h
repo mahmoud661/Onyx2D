@@ -34,4 +34,10 @@ namespace OnyxTools
 
 	/** Toast in the bottom-right corner of the editor. */
 	void Notify(const FText& Message, bool bSuccess);
+
+	/** Opens a documentation page in the browser ("levels/level-painter", optionally with "#section"). */
+	void OpenDocs(const FString& Page);
+
+	/** A small "?" button that opens a documentation page. */
+	TSharedRef<SWidget> HelpButton(const FString& Page, const FText& Tooltip = FText::GetEmpty());
 }

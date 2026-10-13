@@ -8,6 +8,7 @@
 #include "OnyxMovementComponent.generated.h"
 
 
+/** How a character jumps (Onyx Movement > Jump). */
 USTRUCT(BlueprintType)
 struct ONYX2DRUNTIME_API FOnyxJumpSettings
 {
@@ -57,6 +58,7 @@ struct ONYX2DRUNTIME_API FOnyxJumpSettings
 	float MaxFallSpeed = 1800.f;
 };
 
+/** The dash: a short burst of speed with a cooldown (Onyx Movement > Dash). */
 USTRUCT(BlueprintType)
 struct ONYX2DRUNTIME_API FOnyxDashSettings
 {
@@ -79,6 +81,7 @@ struct ONYX2DRUNTIME_API FOnyxDashSettings
 	int32 AirDashes = 1;
 };
 
+/** Sliding down walls and jumping off them (Onyx Movement > Wall). */
 USTRUCT(BlueprintType)
 struct ONYX2DRUNTIME_API FOnyxWallSettings
 {
@@ -105,7 +108,10 @@ struct ONYX2DRUNTIME_API FOnyxWallSettings
 	float ProbeDistance = 12.f;
 };
 
-/** How a character moves in Onyx Water: Jump strokes upward (and jumps out at the surface), Down dives. */
+/**
+ * How a character moves in Onyx Water. Steer in any direction (Move with Jump for up and Down for down, or the stick),
+ * tap Jump for a stroke, Dash for a swim dash, and Jump at the surface to get out. Diving in from higher goes deeper.
+ */
 USTRUCT(BlueprintType)
 struct ONYX2DRUNTIME_API FOnyxSwimSettings
 {
@@ -115,41 +121,119 @@ struct ONYX2DRUNTIME_API FOnyxSwimSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim")
 	bool bCanSwim = true;
 
-	/** Left / right speed in water, cm/s. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0"))
-	float SwimSpeed = 320.f;
+	// --- Moving ---------------------------------------------------------------------------------
 
-	/** How quickly it reaches that speed or stops, cm/s². */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0"))
-	float SwimAcceleration = 1600.f;
+	/** Cruising speed under water, cm/s. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Moving", meta = (ClampMin = "0"))
+	float SwimSpeed = 300.f;
 
-	/** Upward speed of a stroke (Jump under water). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0"))
-	float StrokeSpeed = 460.f;
+	/** Cruising speed along the surface with the head out (faster: strokes in the air), cm/s. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Moving", meta = (ClampMin = "0"))
+	float SurfaceSwimSpeed = 380.f;
 
-	/** Pull down between strokes, as a part of normal gravity: below 0 floats up to the surface (default), 0 hovers, above 0 sinks. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (UIMin = "-0.5", UIMax = "1"))
-	float SinkGravityScale = -0.08f;
+	/** How quickly it speeds up and turns towards the steering, cm/s². High = responsive, never "swimmy". */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Moving", meta = (ClampMin = "0"))
+	float SwimAcceleration = 1500.f;
 
-	/** Fastest sinking speed, cm/s. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0"))
-	float MaxSinkSpeed = 200.f;
+	/** How quickly it slows down after letting go, and how quickly the speed of dives and dashes fades, cm/s². */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Moving", meta = (ClampMin = "0"))
+	float SwimBraking = 650.f;
 
-	/** Sinking speed while holding Down, cm/s. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0"))
-	float DiveSpeed = 380.f;
+	/** Drift without up / down steering, cm/s: above 0 floats up to the surface, 0 hovers, below 0 sinks. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Moving")
+	float Buoyancy = 110.f;
 
-	/** Height of the jump out of the water (Jump at the surface), cm. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0"))
-	float ExitJumpHeight = 200.f;
+	// --- Strokes and swim dash --------------------------------------------------------------------
 
-	/** Part of the falling speed kept when landing in water (the rest goes into the splash). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0", ClampMax = "1"))
-	float EntrySpeedKept = 0.35f;
+	/** Speed of a stroke (tap Jump under water), along the steering (up when not steering), cm/s. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Strokes", meta = (ClampMin = "0"))
+	float StrokeSpeed = 560.f;
+
+	/** Shortest time between two strokes, seconds. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Strokes", meta = (ClampMin = "0", Units = "s"))
+	float StrokeInterval = 0.3f;
+
+	/** Speed of the swim dash (Dash under water), in any direction, cm/s. Needs Dash enabled; uses its cooldown. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Strokes", meta = (ClampMin = "0"))
+	float SwimDashSpeed = 1000.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Strokes", meta = (ClampMin = "0.01", Units = "s"))
+	float SwimDashTime = 0.22f;
+
+	// --- Diving in -----------------------------------------------------------------------------
+
+	/** Part of the falling speed kept on hitting the water (the rest goes into the splash): from higher, deeper. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Diving In", meta = (ClampMin = "0", ClampMax = "1"))
+	float EntrySpeedKept = 0.5f;
+
+	/** Extra part kept when diving in holding Down (head first). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Diving In", meta = (ClampMin = "0", ClampMax = "1"))
+	float HeadFirstBonus = 0.25f;
+
+	/** Part of the sideways speed kept on hitting the water. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Diving In", meta = (ClampMin = "0", ClampMax = "1"))
+	float EntrySideSpeedKept = 0.6f;
+
+	/** How quickly the water uses up the speed of a dive, per second (higher = shallower dives). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Diving In", meta = (ClampMin = "0"))
+	float DiveDrag = 4.f;
+
+	/** Seconds a dive carries on before floating and up / down steering take over. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Diving In", meta = (ClampMin = "0", Units = "s"))
+	float DiveTime = 0.35f;
+
+	// --- Surface and getting out -------------------------------------------------------------------
 
 	/** Bob at the surface with the head out instead of swimming up out of the water. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Surface")
 	bool bFloatAtSurface = true;
+
+	/** Height of the jump out of the water (Jump at the surface), cm. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Surface", meta = (ClampMin = "0"))
+	float ExitJumpHeight = 200.f;
+
+	/** Rising at least this fast through the surface leaves the water (a breach); slower stays afloat, cm/s. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Surface", meta = (ClampMin = "0"))
+	float BreachSpeed = 480.f;
+
+	/** The breach's speed is multiplied by this as the water lets go (swim dash up from deep: a dolphin leap). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Surface", meta = (ClampMin = "1", UIMax = "3"))
+	float BreachBoost = 1.6f;
+
+	/** Swimming into a bank at the surface climbs onto it when its top is at most this high, cm (0 = never). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Surface", meta = (ClampMin = "0"))
+	float ClimbOutHeight = 150.f;
+
+	// --- Breath --------------------------------------------------------------------------------
+
+	/** Breath runs out with the head under water (refills at the surface); then the character takes damage. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Breath")
+	bool bLimitedBreath = false;
+
+	/** Seconds of breath under water. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Breath", meta = (ClampMin = "1", Units = "s", EditCondition = "bLimitedBreath"))
+	float BreathTime = 20.f;
+
+	/** Seconds to fill up again from empty at the surface. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Breath", meta = (ClampMin = "0.1", Units = "s", EditCondition = "bLimitedBreath"))
+	float BreathRefillTime = 1.2f;
+
+	/** Damage every second once out of breath (gradual, so there is time to reach air). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Breath", meta = (ClampMin = "0", EditCondition = "bLimitedBreath"))
+	float DrownDamage = 1.f;
+
+	// --- Look ----------------------------------------------------------------------------------
+
+	/** The sprite leans into the swimming direction, degrees (head down in a dive). 0 for pixel art: turned pixels look jagged. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Look", meta = (ClampMin = "0", ClampMax = "80"))
+	float MaxLean = 0.f;
+
+	/**
+	 * Effects from the character: bubbles when diving in and breathing, a pulse ring with each stroke and dash, sand stirred
+	 * up from the bottom. (The water adds the splash, foam and the wake of anything moving through it.)
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim|Look")
+	bool bSwimEffects = true;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnyxMovementSignature);
@@ -208,9 +292,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
 	bool TryDash(float Direction);
 
-	/** Hold to crouch while on the ground (Down). */
+	/** Hold to crouch while on the ground (Down). Under water it steers down. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
 	void SetCrouchHeld(bool bHeld) { bCrouchHeld = bHeld; }
+
+	/** Up / down steering from -1 to 1 (the stick): the swimming direction. Keys steer through Jump (up) and Down. */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
+	void SetVerticalInput(float Value) { VerticalInput = FMath::Clamp(Value, -1.f, 1.f); }
 
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
 	bool IsCrouchingDown() const { return bCrouchHeld && IsMovingOnGround() && !bDashing; }
@@ -247,6 +335,21 @@ public:
 	/** The water the character is in (null on land). */
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
 	class AOnyxWater* GetWater() const { return Water.Get(); }
+
+	/** Swimming steering: X right, Y up, each from -1 to 1 (zero when not swimming). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Swim")
+	FVector2D GetSwimSteering() const;
+
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Swim")
+	bool IsSwimDashing() const { return SwimDashTimer > 0.f; }
+
+	/** Breath left, 1 = full (always full without Limited Breath). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Swim")
+	float GetBreath() const { return Breath; }
+
+	/** How far the sprite leans into the swimming direction now, degrees (see Max Lean). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Swim")
+	float GetSwimLean() const { return SwimLean; }
 
 	/** Called by Onyx Water while the character overlaps it / when it leaves. */
 	void SetWater(class AOnyxWater* InWater);
@@ -287,6 +390,26 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
 	FOnyxMovementSignature OnSwimStroke;
 
+	/** A swim dash (Dash under water). */
+	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
+	FOnyxMovementSignature OnSwimDash;
+
+	/** Shot out of the water by rising fast through the surface. */
+	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
+	FOnyxMovementSignature OnBreached;
+
+	/** Climbed out onto a bank. */
+	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
+	FOnyxMovementSignature OnClimbedOut;
+
+	/** Breath dropped to a quarter (Limited Breath): time to find air. */
+	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
+	FOnyxMovementSignature OnBreathLow;
+
+	/** Out of breath: every second until it reaches air (Onyx characters take Drown Damage). */
+	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
+	FOnyxMovementSignature OnDrowning;
+
 	/** Re-applies RunSpeed/Acceleration/... to the underlying CharacterMovement values. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
 	void ApplyTuning();
@@ -320,6 +443,19 @@ private:
 	void UpdateSwimming();
 	/** Jump while swimming: a stroke, or a jump out at the surface. */
 	void SwimJump();
+	/** Dash while swimming: a burst in the steering direction (Fallback: the side to go when not steering). */
+	bool SwimDash(float Fallback);
+	/** Leaves the water upwards at Speed (jumping out, breaching, climbing out). */
+	void LeaveWater(float UpSpeed, float SideSpeed);
+	/** Climbs onto the bank on side WallSide (+1 right) when its top is within reach. */
+	bool TryClimbOut(float WallSide);
+	/** Breath under water and the bubbles of breathing. */
+	void UpdateBreath(float DeltaTime);
+	void EmitBubbles(const FVector& Location, int32 Count, float Spread) const;
+	/** A pulse ring through the water at Location (strokes, dashes). */
+	void EmitRing(const FVector& Location, float Radius, float Strength) const;
+	/** The speed of one axis eased towards Target: speeding up / turning at Swim Acceleration, slowing at Swim Braking. */
+	float ApproachSwimSpeed(float Speed, float Target, float DeltaTime) const;
 	float GetCapsuleHalfHeight() const;
 	void EndDash();
 	void HandleLanded();
@@ -345,4 +481,14 @@ private:
 	TWeakObjectPtr<class AOnyxWater> Water;
 	/** After jumping out of the water: don't start swimming again straight away. */
 	float WaterExitTimer = 0.f;
+	float VerticalInput = 0.f;
+	/** Time left of a dive's carry, of a swim dash, before the next stroke. */
+	float DiveTimer = 0.f;
+	float SwimDashTimer = 0.f;
+	float StrokeTimer = 0.f;
+	FVector2D SwimDashDirection = FVector2D(1.f, 0.f);
+	float Breath = 1.f;
+	float DrownTimer = 0.f;
+	float BreathBubbleTimer = 0.f;
+	float SwimLean = 0.f;
 };

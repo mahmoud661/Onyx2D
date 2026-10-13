@@ -7,6 +7,7 @@
 #include "OnyxUISubsystem.generated.h"
 
 class APlayerController;
+class UOnyxDialogueWidget;
 class UOnyxHUDWidget;
 class UOnyxMainMenu;
 class UOnyxPauseMenu;
@@ -45,11 +46,16 @@ public:
 
 private:
 	void SetupForCurrentLevel();
+	void ShowDialogueBox();
+	void HideDialogueBox();
 	void HandlePauseRequested(APlayerController* Player);
 	APlayerController* GetPlayerController() const;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UOnyxHUDWidget> HUD;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UOnyxDialogueWidget> DialogueBox;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UOnyxPauseMenu> PauseMenu;

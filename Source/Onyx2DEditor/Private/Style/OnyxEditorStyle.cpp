@@ -36,6 +36,9 @@ namespace
 		{ TEXT("OnyxCameraBounds"), TEXT("CameraBounds") },
 		{ TEXT("OnyxLevelBuilder"), TEXT("LevelBuilder") },
 		{ TEXT("OnyxParallaxBackground"), TEXT("ParallaxBackground") },
+		{ TEXT("OnyxTriggerZone"), TEXT("TriggerZone") },
+		{ TEXT("OnyxSign"), TEXT("Sign") },
+		{ TEXT("OnyxTalkComponent"), TEXT("Talk") },
 	};
 
 	/** Tool icons: style name suffix -> SVG. */
@@ -66,6 +69,7 @@ namespace
 		{ TEXT("Onyx2D.Eye"), TEXT("Eye") },
 		{ TEXT("Onyx2D.Collision"), TEXT("Collision") },
 		{ TEXT("Onyx2D.Entity.Health"), TEXT("Heart") },
+		{ TEXT("Onyx2D.Entity.Key"), TEXT("Key") },
 		{ TEXT("Onyx2D.EyeOff"), TEXT("EyeOff") },
 		{ TEXT("Onyx2D.Layer.Tiles"), TEXT("LayerTiles") },
 		{ TEXT("Onyx2D.Layer.Entities"), TEXT("LayerEntities") },

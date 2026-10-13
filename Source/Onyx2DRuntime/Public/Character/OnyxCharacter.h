@@ -185,6 +185,10 @@ protected:
 	UFUNCTION()
 	void HandleDashSound();
 
+	/** Out of breath under water: takes the movement's Drown Damage. */
+	UFUNCTION()
+	void HandleDrowning();
+
 	/** Chooses facing each frame (movement input / velocity). Skipped while attacking. */
 	virtual void UpdateFacing();
 
@@ -204,6 +208,8 @@ private:
 	FVector& GetSpriteBaseLocation();
 
 	EOnyxFacing Facing = EOnyxFacing::Right;
+	/** Degrees the sprite leans while swimming (see the movement's Max Lean). */
+	float SpriteLean = 0.f;
 	FVector SpriteBaseLocation = FVector::ZeroVector;
 	bool bHasSpriteBase = false;
 	TWeakObjectPtr<const UPaperFlipbook> AlignedFlipbook;

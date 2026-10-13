@@ -11,6 +11,8 @@
 #include "Character/OnyxBehaviourLibrary.h"
 #include "Character/OnyxCharacter.h"
 #include "World/OnyxLightSwitch.h"
+#include "World/OnyxSign.h"
+#include "Logic/OnyxTriggerZone.h"
 #include "Combat/OnyxCombatTypes.h"
 #include "Components/StaticMeshComponent.h"
 #include "Core/Onyx2DLibrary.h"
@@ -93,6 +95,31 @@ namespace
 		return Brush;
 	}
 
+	/**
+	 * Any other actor that shows sprites or flipbooks (scenery dragged in from the Content Browser, a builder's props):
+	 * recognised so the canvas draws it and it can be moved, without being offered in the Objects list.
+	 */
+	TSharedRef<FOnyxPainterBrush> MakeSceneryFallback()
+	{
+		TSharedRef<FOnyxPainterBrush> Brush = MakeShared<FOnyxPainterBrush>();
+		Brush->Id = TEXT("Scenery");
+		Brush->Label = INVTEXT("Sprite");
+		Brush->Class = APaperSpriteActor::StaticClass();
+		Brush->bStandOnFloor = true;
+		Brush->bHiddenInPalette = true;
+		Brush->DefaultLayer = FOnyxBrushLibrary::DecorLayer;
+		Brush->Color = FLinearColor(0.6f, 0.75f, 0.6f);
+		Brush->Matches = [](const AActor* Actor)
+		{
+			TInlineComponentArray<UMeshComponent*> Meshes(Actor);
+			return Meshes.ContainsByPredicate([](const UMeshComponent* Mesh)
+			{
+				return Mesh->IsA<UPaperSpriteComponent>() || Mesh->IsA<UPaperFlipbookComponent>();
+			});
+		};
+		return Brush;
+	}
+
 	/** Water you drag out over cells: its surface is the top of the area. */
 	TSharedRef<FOnyxPainterBrush> MakeWater()
 	{
@@ -119,6 +146,39 @@ namespace
 			Look.Bottom = Water->DeepColor;
 			Look.Edge = Water->SurfaceColor;
 			Look.bWavyEdge = Water->bWaves;
+			return Look;
+		};
+		return Brush;
+	}
+
+	/** A trigger zone you drag out over cells: an invisible box that runs its actions. */
+	TSharedRef<FOnyxPainterBrush> MakeTriggerZone()
+	{
+		TSharedRef<FOnyxPainterBrush> Brush = MakeBuiltin<AOnyxTriggerZone>(TEXT("TriggerZone"), INVTEXT("Trigger Zone"), FLinearColor(0.35f, 0.9f, 0.55f));
+		Brush->DefaultAreaCells = FIntPoint(3, 3);
+		Brush->GetArea = [](const AActor* Actor)
+		{
+			const AOnyxTriggerZone* Zone = CastChecked<AOnyxTriggerZone>(Actor);
+			const FVector Center = Zone->GetActorLocation();
+			const FVector Half(Zone->Size.X * 0.5f, 0.f, Zone->Size.Y * 0.5f);
+			return FBox(Center - Half, Center + Half);
+		};
+		Brush->SetArea = [](AActor* Actor, const FBox& Area)
+		{
+			AOnyxTriggerZone* Zone = CastChecked<AOnyxTriggerZone>(Actor);
+			Zone->Modify();
+			Zone->Size = FVector2D(Area.Max.X - Area.Min.X, Area.Max.Z - Area.Min.Z);
+			const FVector Center = Area.GetCenter();
+			Zone->SetActorLocation(FVector(Center.X, Zone->GetActorLocation().Y, Center.Z));
+			Zone->RerunConstructionScripts();
+		};
+		Brush->GetAreaLook = [](const AActor* Actor)
+		{
+			const AOnyxTriggerZone* Zone = CastChecked<AOnyxTriggerZone>(Actor);
+			FOnyxAreaLook Look;
+			Look.Top = Zone->EditorColor.CopyWithNewOpacity(0.16f);
+			Look.Bottom = Zone->EditorColor.CopyWithNewOpacity(0.26f);
+			Look.Edge = Zone->EditorColor;
 			return Look;
 		};
 		return Brush;
@@ -220,8 +280,9 @@ void FOnyxBrushLibrary::Rebuild()
 		MakePatrollingFoe(),
 		MakePickup(TEXT("Coin"), INVTEXT("Coin"), EOnyxPickupType::Coin, FLinearColor(1.f, 0.76f, 0.2f)),
 		MakePickup(TEXT("Health"), INVTEXT("Health"), EOnyxPickupType::Health, FLinearColor(1.f, 0.45f, 0.55f), TEXT("Onyx2D.Entity.Health")),
-		MakeBuiltin<AOnyxCheckpoint>(TEXT("Checkpoint"), INVTEXT("Checkpoint"), FLinearColor(0.36f, 0.82f, 0.55f)),
-		MakeBuiltin<AOnyxLevelExit>(TEXT("Exit"), INVTEXT("Level Exit"), FLinearColor(0.65f, 0.48f, 1.f)),
+		MakePickup(TEXT("Key"), INVTEXT("Key"), EOnyxPickupType::Item, FLinearColor(0.3f, 0.85f, 1.f), TEXT("Onyx2D.Entity.Key")),
+		MakeBuiltin<AOnyxCheckpoint>(TEXT("Checkpoint"), INVTEXT("Checkpoint"), FLinearColor(0.36f, 0.82f, 0.55f), true),
+		MakeBuiltin<AOnyxLevelExit>(TEXT("Exit"), INVTEXT("Level Exit"), FLinearColor(0.65f, 0.48f, 1.f), true),
 		MakeBuiltin<AOnyxMovingPlatform>(TEXT("MovingPlatform"), INVTEXT("Moving Platform"), FLinearColor(0.75f, 0.78f, 0.85f)),
 		MakeBuiltin<AOnyxOneWayPlatform>(TEXT("OneWay"), INVTEXT("One-Way Platform"), FLinearColor(0.5f, 0.75f, 0.95f)),
 		MakeBuiltin<AOnyxHazardVolume>(TEXT("Hazard"), INVTEXT("Hazard"), FLinearColor(1.f, 0.4f, 0.2f)),
@@ -229,6 +290,8 @@ void FOnyxBrushLibrary::Rebuild()
 		MakeBuiltin<AOnyxPhysicsProp>(TEXT("PhysicsProp"), INVTEXT("Physics Prop"), FLinearColor(0.8f, 0.58f, 0.35f), true),
 		MakeBuiltin<AOnyxLight2D>(TEXT("Light"), INVTEXT("2D Light"), FLinearColor(1.f, 0.9f, 0.45f)),
 		MakeBuiltin<AOnyxLightSwitch>(TEXT("LightSwitch"), INVTEXT("Light Switch"), FLinearColor(1.f, 0.82f, 0.3f), true),
+		MakeTriggerZone(),
+		MakeBuiltin<AOnyxSign>(TEXT("Sign"), INVTEXT("Sign"), FLinearColor(0.85f, 0.63f, 0.4f), true),
 	});
 	for (const FSoftObjectPath& Path : GetDefault<UOnyxPainterSettings>()->CustomBrushes)
 	{
@@ -237,6 +300,7 @@ void FOnyxBrushLibrary::Rebuild()
 			Brushes.Add(Brush.ToSharedRef());
 		}
 	}
+	Brushes.Add(MakeSceneryFallback());
 	OnChanged.Broadcast();
 }
 
@@ -374,7 +438,12 @@ TSharedPtr<FOnyxPainterBrush> FOnyxBrushLibrary::FindFor(const AActor* Actor) co
 		const FString TagString = Tag.ToString();
 		if (TagString.StartsWith(BrushTagPrefix))
 		{
-			return FindById(*TagString.RightChop(BrushTagPrefix.Len()));
+			// A brush that is gone (a removed custom brush, one made by a builder) falls back to matching below.
+			if (TSharedPtr<FOnyxPainterBrush> Tagged = FindById(*TagString.RightChop(BrushTagPrefix.Len())))
+			{
+				return Tagged;
+			}
+			break;
 		}
 	}
 	const TSharedRef<FOnyxPainterBrush>* Found = Brushes.FindByPredicate([Actor](const TSharedRef<FOnyxPainterBrush>& Brush) { return Brush->Matches && Brush->Matches(Actor); });

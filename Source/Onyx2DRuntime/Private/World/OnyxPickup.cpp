@@ -56,7 +56,10 @@ void AOnyxPickup::OnConstruction(const FTransform& Transform)
 		UOnyx2DLibrary::ConfigureSpriteLighting(Animated, false);
 		return;
 	}
-	UOnyx2DLibrary::ApplyGlowColor(Visual, Type == EOnyxPickupType::Coin ? FLinearColor(1.f, 0.72f, 0.12f) : FLinearColor(1.f, 0.22f, 0.32f), 1.1f);
+	const FLinearColor Glow = Type == EOnyxPickupType::Coin ? FLinearColor(1.f, 0.72f, 0.12f)
+		: Type == EOnyxPickupType::Health ? FLinearColor(1.f, 0.22f, 0.32f)
+		: FLinearColor(0.3f, 0.85f, 1.f);
+	UOnyx2DLibrary::ApplyGlowColor(Visual, Glow, 1.1f);
 }
 
 void AOnyxPickup::BeginPlay()
@@ -103,7 +106,14 @@ void AOnyxPickup::HandleOverlap(UPrimitiveComponent* OverlappedComponent, AActor
 	}
 	else if (UOnyxScoreSubsystem* Score = UOnyxScoreSubsystem::Get(this))
 	{
-		Score->AddCoins(Amount);
+		if (Type == EOnyxPickupType::Item)
+		{
+			Score->AddItem(ItemName, FMath::Max(Amount, 1));
+		}
+		else
+		{
+			Score->AddCoins(Amount);
+		}
 	}
 
 	UOnyxAudioSubsystem::PlaySoundAt(this, CollectSound, GetActorLocation());

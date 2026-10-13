@@ -41,10 +41,16 @@
 #include "World/OnyxMovingPlatform.h"
 #include "World/OnyxOneWayPlatform.h"
 #include "World/OnyxPickup.h"
+#include "World/OnyxSign.h"
+#include "Character/OnyxTalkComponent.h"
+#include "Logic/OnyxAction.h"
+#include "Logic/OnyxTriggerZone.h"
 
 namespace
 {
 	constexpr float PlaneTolerance = 1.f;
+	const TCHAR* ZonesDocs = TEXT("world/trigger-zones");
+	const TCHAR* DialogueDocs = TEXT("world/signs-and-dialogue");
 
 	TSharedPtr<FOnyxValidationIssue> AddIssue(TArray<TSharedPtr<FOnyxValidationIssue>>& Issues, EOnyxIssueSeverity Severity, const FText& Message,
 		const FText& FixLabel = FText::GetEmpty(), TFunction<void()> Fix = nullptr, AActor* Actor = nullptr)
@@ -255,26 +261,6 @@ TArray<TSharedPtr<FOnyxValidationIssue>> FOnyxLevelValidator::Validate()
 				}, *It);
 		}
 	}
-	for (TActorIterator<APaperTileMapActor> It(World); It; ++It)
-	{
-		if (It->GetActorLocation().Y > Onyx2D::TileMapDepth + 1.f)
-		{
-			TWeakObjectPtr<APaperTileMapActor> Weak = *It;
-			AddIssue(Issues, EOnyxIssueSeverity::Warning,
-				FText::Format(INVTEXT("{0} is on the gameplay plane: characters and pickups flicker against its tiles (z-fighting)."), FText::FromString(It->GetActorLabel())),
-				INVTEXT("Move behind"), [Weak]()
-				{
-					if (APaperTileMapActor* Target = Weak.Get())
-					{
-						const FScopedTransaction Transaction(INVTEXT("Move Tile Map Behind Gameplay Plane"));
-						Target->Modify();
-						FVector Location = Target->GetActorLocation();
-						Location.Y = Onyx2D::TileMapDepth;
-						Target->SetActorLocation(Location);
-					}
-				}, *It);
-		}
-	}
 	AOnyxLightingEnvironment* Environment = TActorIterator<AOnyxLightingEnvironment>(World) ? *TActorIterator<AOnyxLightingEnvironment>(World) : nullptr;
 	if (!Environment && !TActorIterator<ALight>(World))
 	{
@@ -324,6 +310,28 @@ TArray<TSharedPtr<FOnyxValidationIssue>> FOnyxLevelValidator::Validate()
 
 	// --- Per actor ---------------------------------------------------------------
 	int32 Coins = 0;
+	TSet<FName> GivenItems;
+	TArray<const AOnyxTriggerZone*> ZonesNeedingItems;
+	// Actions that aren't set up yet ("Teleport has no destination"), and the items Give actions hand out.
+	auto CheckActions = [&Issues, &GivenItems](const TArray<TObjectPtr<UOnyxAction>>& Actions, AActor* Owner, const FText& Label, const TCHAR* Docs)
+	{
+		for (const UOnyxAction* Action : Actions)
+		{
+			if (!Action)
+			{
+				continue;
+			}
+			const FText Problem = Action->CheckSetup();
+			if (!Problem.IsEmpty())
+			{
+				AddIssue(Issues, EOnyxIssueSeverity::Warning, FText::Format(INVTEXT("{0}: {1}"), Label, Problem), FText::GetEmpty(), nullptr, Owner)->DocsPage = Docs;
+			}
+			if (const UOnyxAction_Give* Give = Cast<UOnyxAction_Give>(Action); Give && Give->What == EOnyxGiveWhat::Item)
+			{
+				GivenItems.Add(Give->Item);
+			}
+		}
+	};
 	TMap<UTexture2D*, FText> SheetsWithoutNormals;
 	TSet<UPaperTileSet*> UnpaddedTileSets;
 	for (TActorIterator<AActor> It(World); It; ++It)
@@ -411,6 +419,59 @@ TArray<TSharedPtr<FOnyxValidationIssue>> FOnyxLevelValidator::Validate()
 		if (const AOnyxPickup* Pickup = Cast<AOnyxPickup>(Actor); Pickup && Pickup->Type == EOnyxPickupType::Coin)
 		{
 			Coins += Pickup->Amount;
+		}
+		if (const AOnyxPickup* Pickup = Cast<AOnyxPickup>(Actor); Pickup && Pickup->Type == EOnyxPickupType::Item)
+		{
+			GivenItems.Add(Pickup->ItemName);
+		}
+
+		if (const AOnyxTriggerZone* Zone = Cast<AOnyxTriggerZone>(Actor))
+		{
+			const bool bHasActions = Zone->Actions.ContainsByPredicate([](const UOnyxAction* Action) { return Action != nullptr; });
+			if (!bHasActions)
+			{
+				AddIssue(Issues, EOnyxIssueSeverity::Warning,
+					FText::Format(INVTEXT("{0} has no Actions, so it does nothing yet. Select it and add some in Details > Zone > Actions."), Label),
+					FText::GetEmpty(), nullptr, Actor)->DocsPage = ZonesDocs;
+			}
+			CheckActions(Zone->Actions, Actor, Label, ZonesDocs);
+			CheckActions(Zone->OtherwiseActions, Actor, Label, ZonesDocs);
+			if (Zone->Needs == EOnyxTriggerNeeds::Item)
+			{
+				ZonesNeedingItems.Add(Zone);
+			}
+		}
+		if (const AOnyxSign* Sign = Cast<AOnyxSign>(Actor))
+		{
+			const bool bHasText = Sign->Pages.ContainsByPredicate([](const FText& Page) { return !Page.IsEmpty(); });
+			if (!bHasText)
+			{
+				AddIssue(Issues, EOnyxIssueSeverity::Warning, FText::Format(INVTEXT("{0} has nothing written on it: add Pages in Details > Sign."), Label),
+					FText::GetEmpty(), nullptr, Actor)->DocsPage = DialogueDocs;
+			}
+			CheckActions(Sign->AfterReading, Actor, Label, DialogueDocs);
+		}
+		TArray<UOnyxTalkComponent*> Talkers;
+		Actor->GetComponents(Talkers);
+		for (const UOnyxTalkComponent* Talk : Talkers)
+		{
+			const bool bHasText = Talk->Lines.ContainsByPredicate([](const FText& Line) { return !Line.IsEmpty(); });
+			if (!bHasText)
+			{
+				AddIssue(Issues, EOnyxIssueSeverity::Warning, FText::Format(INVTEXT("{0} can be talked to but has no Lines: add them in its Talk component."), Label),
+					FText::GetEmpty(), nullptr, Actor)->DocsPage = DialogueDocs;
+			}
+			CheckActions(Talk->AfterFirstTalk, Actor, Label, DialogueDocs);
+		}
+	}
+	for (const AOnyxTriggerZone* Zone : ZonesNeedingItems)
+	{
+		if (!GivenItems.Contains(Zone->NeededItem))
+		{
+			AddIssue(Issues, EOnyxIssueSeverity::Info,
+				FText::Format(INVTEXT("{0} needs {1} {2}, but nothing in this level gives one (an Item pickup named {2}, or a Give action). Fine if the player brings it from an earlier level."),
+					FText::FromString(Zone->GetActorLabel()), Zone->NeededAmount, FText::FromName(Zone->NeededItem)),
+				FText::GetEmpty(), nullptr, const_cast<AOnyxTriggerZone*>(Zone))->DocsPage = ZonesDocs;
 		}
 	}
 	for (UPaperTileSet* TileSet : UnpaddedTileSets)

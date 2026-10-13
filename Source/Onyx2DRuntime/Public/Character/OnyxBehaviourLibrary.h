@@ -25,6 +25,8 @@ enum class EOnyxBehaviour : uint8
 	ContactDamage = 1 << 4,
 	/** Jumping on its head defeats it (Stompable component). */
 	Stompable = 1 << 5,
+	/** The player can talk to it with Interact (Talk component). */
+	Talk = 1 << 6,
 };
 ENUM_CLASS_FLAGS(EOnyxBehaviour);
 

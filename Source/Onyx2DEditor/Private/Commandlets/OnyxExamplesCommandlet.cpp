@@ -2,8 +2,10 @@
 
 #include "Commandlets/OnyxExamplesCommandlet.h"
 #include "Builders/OnyxMaterialBuilder.h"
+#include "Examples/OnyxStarterGame.h"
 #include "Examples/OnyxSunnyLandExample.h"
 #include "Examples/OnyxWaterExample.h"
+#include "Examples/OnyxLearnExample.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOnyxExamples, Log, All);
 
@@ -26,6 +28,29 @@ int32 UOnyxExamplesCommandlet::Main(const FString& Params)
 		return 0;
 	}
 	FText Error;
+	// -starter: only the starter game (-makestart also makes it the project's start).
+	const bool bMakeStart = FParse::Param(*Params, TEXT("makestart"));
+	if (FParse::Param(*Params, TEXT("starter")))
+	{
+		if (!FOnyxStarterGame::Build(bMakeStart, Error))
+		{
+			UE_LOG(LogOnyxExamples, Error, TEXT("Starter game: %s"), *Error.ToString());
+			return 1;
+		}
+		UE_LOG(LogOnyxExamples, Display, TEXT("Starter game built: %s"), FOnyxStarterGame::LevelPath);
+		return 0;
+	}
+	// -learn: only what the docs' Learn Unreal pages build (needs Sunny Land).
+	if (FParse::Param(*Params, TEXT("learn")))
+	{
+		if (!FOnyxLearnExample::Build(Error))
+		{
+			UE_LOG(LogOnyxExamples, Error, TEXT("Learn Unreal: %s"), *Error.ToString());
+			return 1;
+		}
+		UE_LOG(LogOnyxExamples, Display, TEXT("Learn Unreal built: %s"), FOnyxLearnExample::LevelPath);
+		return 0;
+	}
 	if (!FOnyxSunnyLandExample::Build(Error))
 	{
 		UE_LOG(LogOnyxExamples, Error, TEXT("Sunny Land: %s"), *Error.ToString());
@@ -38,5 +63,17 @@ int32 UOnyxExamplesCommandlet::Main(const FString& Params)
 		return 1;
 	}
 	UE_LOG(LogOnyxExamples, Display, TEXT("Water test built: %s"), FOnyxWaterExample::LevelPath);
+	if (!FOnyxStarterGame::Build(bMakeStart, Error))
+	{
+		UE_LOG(LogOnyxExamples, Error, TEXT("Starter game: %s"), *Error.ToString());
+		return 1;
+	}
+	UE_LOG(LogOnyxExamples, Display, TEXT("Starter game built: %s"), FOnyxStarterGame::LevelPath);
+	if (!FOnyxLearnExample::Build(Error))
+	{
+		UE_LOG(LogOnyxExamples, Error, TEXT("Learn Unreal: %s"), *Error.ToString());
+		return 1;
+	}
+	UE_LOG(LogOnyxExamples, Display, TEXT("Learn Unreal built: %s"), FOnyxLearnExample::LevelPath);
 	return 0;
 }

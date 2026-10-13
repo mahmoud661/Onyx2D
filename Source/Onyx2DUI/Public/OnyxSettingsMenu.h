@@ -10,6 +10,7 @@ class UBackgroundBlur;
 class UScrollBox;
 class USizeBox;
 
+/** One row of the settings menu, as built by the menu (its button, background and value). */
 USTRUCT()
 struct FOnyxOptionRow
 {

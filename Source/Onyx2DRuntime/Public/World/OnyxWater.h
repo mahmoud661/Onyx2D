@@ -20,7 +20,7 @@ class USoundBase;
  *  - Floating: physics objects are lifted at several points across their body by the part under the surface, so they
  *    tilt, right themselves and bob; each point is slowed by the water (drag, spin drag) and carried by the current.
  *    Heavy objects sink.
- *  - Swimming: Onyx characters swim (Swim settings on their movement component) and ride the waves.
+ *  - Swimming: Onyx characters swim (Swim settings on their movement component), ride the waves and breathe out bubbles.
  *  - Waves: a spring surface that ripples by itself, moves with floating objects and splashes (with droplets) when
  *    anything goes in or comes out; optional splash effect and sound.
  *  - Look: smooth shader water: depth gradient, drifting caustics and light shafts, rising bubbles, a crisp surface line,
@@ -156,6 +156,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|Splashes", meta = (ClampMin = "0"))
 	float SplashMinSpeed = 120.f;
 
+	// --- Effects ----------------------------------------------------------------------------
+
+	/**
+	 * Anything moving through the water leaves a wake: bubbles and swirling streaks under water, foam and paddle splashes
+	 * along the surface. Splashes also send a ring through the water and spread foam on the surface.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|Effects")
+	bool bWakes = true;
+
+	/** More or fewer wake effects (1 = normal). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|Effects", meta = (ClampMin = "0", UIMax = "3", EditCondition = "bWakes"))
+	float WakeAmount = 1.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|Effects")
+	FLinearColor FoamColor = FLinearColor(0.93f, 0.98f, 1.f, 0.8f);
+
+	/** Sand stirred up from the bottom. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|Effects")
+	FLinearColor SiltColor = FLinearColor(0.62f, 0.52f, 0.38f, 0.5f);
+
 	// --- Queries ----------------------------------------------------------------------------
 
 	/** Height of the calm surface (world Z). */
@@ -181,6 +201,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Water")
 	void ThrowDroplets(float WorldX, float Speed, int32 Count);
 
+	/** Releases Count bubbles under water within Spread cm of Location: they wobble up and pop at the surface. */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Water")
+	void EmitBubbles(const FVector& Location, int32 Count, float Spread = 10.f);
+
+	/** A ring spreading through the water from Location (a pulse from a dive, a kick or a blast), Radius cm when it fades. */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Water")
+	void EmitRing(const FVector& Location, float Radius = 60.f, float Strength = 1.f);
+
+	/** Foam on the surface over Width cm around a world X, spreading out and riding the waves. */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Water")
+	void EmitFoam(float WorldX, float Width = 40.f, float Strength = 1.f);
+
+	/** A cloud of sand stirred up from the bottom at Location. */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Water")
+	void EmitSilt(const FVector& Location, float Strength = 1.f);
+
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual bool ShouldTickIfViewportsOnly() const override { return true; }
@@ -199,11 +235,55 @@ private:
 		float Radius = 4.f;
 	};
 
+	struct FBubble
+	{
+		FVector2D Position;
+		float Age = 0.f;
+		float Life = 4.f;
+		float Radius = 3.f;
+		float RiseSpeed = 90.f;
+		float Phase = 0.f;
+	};
+
+	/** Shapes drawn by the particle shader (its "Kind": 0 droplet and 1 bubble come first). */
+	enum class EEffectKind : uint8
+	{
+		Ring = 2,
+		Foam = 3,
+		Streak = 4,
+		Silt = 5
+	};
+
+	/** A short-lived shape: grows from StartSize to EndSize, drifts (slowed by the water) and fades. */
+	struct FEffect
+	{
+		EEffectKind Kind = EEffectKind::Ring;
+		FVector2D Position = FVector2D::ZeroVector;
+		FVector2D Velocity = FVector2D::ZeroVector;
+		/** Streaks: the way they point. */
+		FVector2D Direction = FVector2D(1.f, 0.f);
+		float Age = 0.f;
+		float Life = 1.f;
+		float StartSize = 10.f;
+		float EndSize = 10.f;
+		/** Streaks: their length (StartSize is their thickness). */
+		float Length = 0.f;
+		float Alpha = 1.f;
+		/** Varies the shape (foam lumps). */
+		float Seed = 0.f;
+	};
+
 	void ResetSurface();
 	void SimulateWaves(float DeltaSeconds);
 	void UpdateDroplets(float DeltaSeconds);
+	void UpdateBubbles(float DeltaSeconds);
+	void UpdateEffects(float DeltaSeconds);
+	FEffect* AddEffect(EEffectKind Kind, const FVector2D& Position, float Life, float StartSize, float EndSize, float Alpha);
+	/** The trail of something moving through the water (Bounds and Velocity in the world). */
+	void LeaveWake(const FBox& Bounds, const FVector& Velocity, float DeltaSeconds);
 	void UpdateMesh();
-	void UpdateDropletMesh();
+	/** Droplets, bubbles and effects, as one mesh section. */
+	void UpdateParticleMesh();
 	void UpdateLook();
 	void EnsureMaterials();
 	void AffectOverlaps(float DeltaSeconds);
@@ -218,6 +298,8 @@ private:
 	TArray<float> Heights;
 	TArray<float> Speeds;
 	TArray<FDroplet> Droplets;
+	TArray<FBubble> Bubbles;
+	TArray<FEffect> Effects;
 	float WaveTime = 0.f;
 	float StepRemainder = 0.f;
 

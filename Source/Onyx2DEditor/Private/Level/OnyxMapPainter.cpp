@@ -22,8 +22,26 @@ namespace
 	constexpr int32 MaxFillCells = 100000;
 
 	/** Collision bounds (what actually stands on the floor), or the visual bounds for objects without collision. */
+	/**
+	 * What an object stands on: the bounds of what you see of it (sprites, flipbooks, meshes), so trigger boxes and talk
+	 * ranges that reach below the art don't lift it off the floor. Objects with nothing visible in the game (a player
+	 * start) use their collision instead.
+	 */
 	bool GetStandingBounds(const AActor* Actor, FVector& OutOrigin, FVector& OutExtent)
 	{
+		FBox Visible(ForceInit);
+		Actor->ForEachComponent<UMeshComponent>(false, [&Visible](const UMeshComponent* Mesh)
+		{
+			if (Mesh->IsRegistered() && Mesh->IsVisible() && !Mesh->bHiddenInGame && !Mesh->IsEditorOnly())
+			{
+				Visible += Mesh->Bounds.GetBox();
+			}
+		});
+		if (Visible.IsValid)
+		{
+			Visible.GetCenterAndExtents(OutOrigin, OutExtent);
+			return !OutExtent.IsNearlyZero();
+		}
 		Actor->GetActorBounds(true, OutOrigin, OutExtent);
 		if (OutExtent.IsNearlyZero())
 		{
@@ -116,6 +134,23 @@ APaperTileMapActor* FOnyxMapPainter::FindMapActor() const
 	return nullptr;
 }
 
+TArray<APaperTileMapActor*> FOnyxMapPainter::FindMapActors() const
+{
+	TArray<APaperTileMapActor*> Actors;
+	UWorld* World = FOnyxLevelTools::GetEditorWorld();
+	if (World && TileMap.IsValid())
+	{
+		for (TActorIterator<APaperTileMapActor> It(World); It; ++It)
+		{
+			if (It->GetRenderComponent() && It->GetRenderComponent()->TileMap == TileMap.Get())
+			{
+				Actors.Add(*It);
+			}
+		}
+	}
+	return Actors;
+}
+
 APaperTileMapActor* FOnyxMapPainter::PlaceMapInLevel()
 {
 	UWorld* World = FOnyxLevelTools::GetEditorWorld();
@@ -197,6 +232,12 @@ FVector2D FOnyxMapPainter::WorldToMapPixels(const FVector& Location) const
 	return FVector2D((Column + 0.5) * Tile.X, (Row + 0.5) * Tile.Y);
 }
 
+TOptional<FVector> FOnyxMapPainter::GetMapCornerInLevel() const
+{
+	const APaperTileMapActor* Actor = FindMapActor();
+	return Actor ? TOptional<FVector>(Actor->GetRenderComponent()->GetTileCornerPosition(0, 0, 0, true)) : TOptional<FVector>();
+}
+
 bool FOnyxMapPainter::WorldToCell(const FVector& Location, FIntPoint& OutCell) const
 {
 	const APaperTileMapActor* Actor = FindMapActor();
@@ -211,10 +252,67 @@ bool FOnyxMapPainter::WorldToCell(const FVector& Location, FIntPoint& OutCell) c
 
 void FOnyxMapPainter::Resize(const FIntPoint& NewSize)
 {
-	ChangeMapStructure(INVTEXT("Resize Tile Map"), [&NewSize](UPaperTileMap& Map)
+	const FIntPoint Clamped(FMath::Clamp(NewSize.X, 1, MaxMapSize), FMath::Clamp(NewSize.Y, 1, MaxMapSize));
+	ResizeEdges(FOnyxMapEdges::KeepBottomLeft(GetMapSize(), Clamped));
+}
+
+bool FOnyxMapPainter::ResizeEdges(const FOnyxMapEdges& Edges)
+{
+	const FIntPoint OldSize = GetMapSize();
+	const FIntPoint NewSize = Edges.Apply(OldSize);
+	if (!TileMap.IsValid() || Edges.IsZero() || NewSize.X < 1 || NewSize.Y < 1 || NewSize.X > MaxMapSize || NewSize.Y > MaxMapSize)
 	{
-		Map.ResizeMap(FMath::Clamp(NewSize.X, 1, 1024), FMath::Clamp(NewSize.Y, 1, 1024));
+		return false;
+	}
+	// Where the old top-left cell is in the level, for every actor showing the map.
+	TArray<TPair<APaperTileMapActor*, FVector>> Corners;
+	for (APaperTileMapActor* Actor : FindMapActors())
+	{
+		Corners.Emplace(Actor, Actor->GetRenderComponent()->GetTileCornerPosition(0, 0, 0, true));
+	}
+	ChangeMapStructure(FText::Format(INVTEXT("Resize Tile Map to {0} x {1}"), NewSize.X, NewSize.Y), [&](UPaperTileMap& Map)
+	{
+		// Paper2D resizes from the top-left: copy every layer, resize, then put the cells back shifted by what was added
+		// on the left and top (cut-off cells drop out, new ones are empty).
+		TArray<TArray<FPaperTileInfo>> OldCells;
+		for (const UPaperTileLayer* TileLayer : Map.TileLayers)
+		{
+			TArray<FPaperTileInfo>& Cells = OldCells.AddDefaulted_GetRef();
+			Cells.Reserve(OldSize.X * OldSize.Y);
+			for (int32 Y = 0; Y < OldSize.Y; ++Y)
+			{
+				for (int32 X = 0; X < OldSize.X; ++X)
+				{
+					Cells.Add(TileLayer->GetCell(X, Y));
+				}
+			}
+		}
+		Map.ResizeMap(NewSize.X, NewSize.Y);
+		for (int32 LayerIndex = 0; LayerIndex < Map.TileLayers.Num(); ++LayerIndex)
+		{
+			UPaperTileLayer* TileLayer = Map.TileLayers[LayerIndex];
+			for (int32 Y = 0; Y < NewSize.Y; ++Y)
+			{
+				for (int32 X = 0; X < NewSize.X; ++X)
+				{
+					const FIntPoint Old(X - Edges.Left, Y - Edges.Top);
+					const bool bKept = Old.X >= 0 && Old.Y >= 0 && Old.X < OldSize.X && Old.Y < OldSize.Y;
+					TileLayer->SetCell(X, Y, bKept ? OldCells[LayerIndex][Old.Y * OldSize.X + Old.X] : FPaperTileInfo());
+				}
+			}
+		}
+		// The old top-left cell is now cell (Left, Top): move each map actor so it is back where it was in the level.
+		for (const TPair<APaperTileMapActor*, FVector>& Corner : Corners)
+		{
+			const FVector Now = Corner.Key->GetRenderComponent()->GetTileCornerPosition(Edges.Left, Edges.Top, 0, true);
+			if (!Now.Equals(Corner.Value, 0.01))
+			{
+				Corner.Key->Modify();
+				Corner.Key->SetActorLocation(Corner.Key->GetActorLocation() + (Corner.Value - Now));
+			}
+		}
 	});
+	return true;
 }
 
 // --- Tile layers ------------------------------------------------------------------------
@@ -549,11 +647,9 @@ void FOnyxMapPainter::RebuildLevelCollision()
 
 float FOnyxMapPainter::GetObjectLayerDepth(FName ObjectLayer)
 {
-	if (ObjectLayer == FOnyxBrushLibrary::BackgroundLayer)
-	{
-		return Onyx2D::BackgroundObjectDepth;
-	}
-	return ObjectLayer == FOnyxBrushLibrary::DecorLayer ? Onyx2D::ForegroundObjectDepth : 0.f;
+	// Every object layer is on the gameplay plane: the draw order (from the layer tag) puts Background objects behind
+	// the tiles and Decor in front of everything.
+	return 0.f;
 }
 
 FName FOnyxMapPainter::GetObjectLayer(const AActor* Actor)

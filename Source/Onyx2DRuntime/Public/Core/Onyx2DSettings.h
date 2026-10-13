@@ -82,4 +82,11 @@ public:
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Editor")
 	bool bOpenLevelsInSideView = true;
+
+	/**
+	 * Where the editor's Help buttons open the Onyx2D documentation. The default is the docs site running on this
+	 * computer (npm run dev in the Onyx2D-Docs folder); point it at wherever your team hosts the docs.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Editor")
+	FString DocsUrl = TEXT("http://localhost:3000/docs");
 };

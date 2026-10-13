@@ -6,6 +6,7 @@
 #include "Engine/DataAsset.h"
 #include "OnyxCameraTypes.generated.h"
 
+/** How the camera projects the 2D world. */
 UENUM(BlueprintType)
 enum class EOnyxCameraProjection : uint8
 {
@@ -15,6 +16,7 @@ enum class EOnyxCameraProjection : uint8
 	Orthographic
 };
 
+/** How the camera follows its target up and down. */
 UENUM(BlueprintType)
 enum class EOnyxVerticalFollow : uint8
 {
@@ -26,6 +28,7 @@ enum class EOnyxVerticalFollow : uint8
 	Locked
 };
 
+/** What keeps the camera from showing outside the playable area. */
 UENUM(BlueprintType)
 enum class EOnyxCameraConfine : uint8
 {

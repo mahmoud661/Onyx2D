@@ -1,6 +1,7 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "OnyxEditorLibrary.h"
+#include "Builders/OnyxImageAnalysis.h"
 #include "Builders/OnyxArtImporter.h"
 #include "Builders/OnyxNormalMaps.h"
 #include "Builders/OnyxFramePacker.h"
@@ -112,8 +113,10 @@ UPaperSprite* UOnyxEditorLibrary::CreateSpriteFromCell(UTexture2D* Texture, FInt
 		return nullptr;
 	}
 	FOnyxAssetUtils::ConfigurePixelArtTexture(Texture);
+	// Stands on its lowest visible pixel (props often have empty rows at the bottom of the image).
+	const FIntRect Rect = FOnyxImageAnalysis::CropToFeet(Texture, { FIntRect(FIntPoint(Cell.X * CellSize.X, Cell.Y * CellSize.Y), FIntPoint((Cell.X + 1) * CellSize.X, (Cell.Y + 1) * CellSize.Y)) })[0];
 	UPaperSprite* Sprite = FOnyxAssetUtils::CreateSprite(Folder, FOnyxAssetUtils::SanitizeName(Name), Texture,
-		FIntPoint(Cell.X * CellSize.X, Cell.Y * CellSize.Y), CellSize, 1.f / FMath::Max(CentimetersPerPixel, 0.01f), ESpritePivotMode::Bottom_Center);
+		Rect.Min, Rect.Size(), 1.f / FMath::Max(CentimetersPerPixel, 0.01f), ESpritePivotMode::Bottom_Center);
 	if (Sprite)
 	{
 		FOnyxAssetUtils::SavePackages({ Sprite->GetPackage() });

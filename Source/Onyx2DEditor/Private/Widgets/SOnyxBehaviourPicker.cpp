@@ -101,6 +101,7 @@ TSharedRef<SWidget> SOnyxBehaviourPicker::MakeMenu()
 	const FPreset Presets[] = {
 		{ INVTEXT("Hero"), INVTEXT("Player Control, Camera, Respawn; team Player."), int32(UOnyxBehaviourLibrary::PlayerPreset), OnyxTeams::Player },
 		{ INVTEXT("Patrolling Foe"), INVTEXT("Patrol, Contact Damage, Stompable; team Enemy."), int32(UOnyxBehaviourLibrary::PatrolFoePreset), OnyxTeams::Enemy },
+		{ INVTEXT("Friendly NPC"), INVTEXT("Talk; team Player, so the player's attacks don't hurt them."), int32(EOnyxBehaviour::Talk), OnyxTeams::Player },
 		{ INVTEXT("Nothing"), INVTEXT("No behaviours: add your own components or logic."), 0, OnyxTeams::Neutral },
 	};
 	for (const FPreset& Preset : Presets)

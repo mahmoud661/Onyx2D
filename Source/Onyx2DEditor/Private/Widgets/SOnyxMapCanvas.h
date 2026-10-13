@@ -20,10 +20,13 @@ DECLARE_DELEGATE_ThreeParams(FOnOnyxCanvasStroke, EOnyxStrokePhase /*Phase*/, FI
 DECLARE_DELEGATE_RetVal_OneParam(FReply, FOnOnyxCanvasKey, const FKeyEvent&);
 /** The mouse cursor to show over a point of the map (in map pixels); unset = the default. */
 DECLARE_DELEGATE_RetVal_OneParam(TOptional<EMouseCursor::Type>, FOnOnyxCanvasCursor, FVector2D /*MapPixels*/);
+/** The map's border was dragged: grow (positive) or shrink (negative) the map by these cells. */
+DECLARE_DELEGATE_OneParam(FOnOnyxCanvasResizeMap, const FOnyxMapEdges& /*Edges*/);
 
 /**
  * LDtk-style map canvas: draws the tile layers and gameplay entities of a tile map,
  * pans (middle mouse or Space + drag), zooms around the cursor and reports strokes in cell space.
+ * The map's border has grips: dragging one previews the cells to add or remove and reports them (OnResizeMap).
  * It never edits anything itself.
  */
 class SOnyxMapCanvas : public SLeafWidget
@@ -46,6 +49,8 @@ public:
 		SLATE_EVENT(FOnOnyxCanvasStroke, OnStroke)
 		SLATE_EVENT(FOnOnyxCanvasKey, OnKey)
 		SLATE_EVENT(FOnOnyxCanvasCursor, OnQueryCursor)
+		/** Unbound = the border can't be dragged. */
+		SLATE_EVENT(FOnOnyxCanvasResizeMap, OnResizeMap)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -70,6 +75,7 @@ public:
 	virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& Event) override;
 	virtual FReply OnKeyUp(const FGeometry& Geometry, const FKeyEvent& Event) override;
 	virtual FCursorReply OnCursorQuery(const FGeometry& Geometry, const FPointerEvent& Event) const override;
+	virtual void OnMouseCaptureLost(const FCaptureLostEvent& CaptureLostEvent) override;
 
 private:
 	float CellPixels() const;
@@ -89,6 +95,15 @@ private:
 		const FVector2f& Min, const FVector2f& Max, float Opacity, bool bSelected) const;
 	/** Where an area object is on the canvas (from where it really is in the level). */
 	bool GetAreaRect(const FOnyxPainterBrush& Brush, const AActor* Actor, const FVector2f& MapMin, FVector2f& OutMin, FVector2f& OutMax) const;
+	/** Map edges (EOnyxMapEdge flags) at a point of the canvas: a thin band just outside the border, so painting the edge cells never grabs it. */
+	int32 GetMapEdgesAt(const FVector2D& Local) const;
+	/** The cells the border drag adds or removes with the mouse at Local (the map stays 1..MaxMapSize cells). */
+	FOnyxMapEdges GetDraggedEdges(const FVector2D& Local) const;
+	/** The border grips, and while dragging: the cells to add and to remove, the new outline and a label. */
+	void DrawMapEdges(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, const FVector2f& MapMin,
+		const FVector2f& MapMax, const FVector2f& CellSize) const;
+	/** Keeps the level still on screen when the map's top-left corner moves in the level (cells added or removed on the left or top, or their undo). */
+	void FollowMapCorner() const;
 
 	FOnyxMapPainter* Painter = nullptr;
 	TAttribute<bool> ShowGrid;
@@ -102,6 +117,7 @@ private:
 	FOnOnyxCanvasStroke OnStroke;
 	FOnOnyxCanvasKey OnKey;
 	FOnOnyxCanvasCursor OnQueryCursor;
+	FOnOnyxCanvasResizeMap OnResizeMap;
 	FVector2D HoverLocal = FVector2D::ZeroVector;
 
 	mutable FVector2D Pan = FVector2D(40.f, 40.f);
@@ -111,6 +127,9 @@ private:
 	mutable bool bFitRequested = true;
 	mutable FSlateBrush TileBrush;
 	mutable FSlateBrush SpriteBrush;
+	/** The map and where its top-left corner was in the level at the last paint (see FollowMapCorner). */
+	mutable TWeakObjectPtr<UPaperTileMap> CornerMap;
+	mutable TOptional<FVector> CornerInLevel;
 
 	FIntPoint HoverCell = FIntPoint(-1, -1);
 	bool bHasHover = false;
@@ -118,4 +137,8 @@ private:
 	bool bStroking = false;
 	bool bStrokeSecondary = false;
 	bool bSpaceHeld = false;
+	/** Dragging the map's border: the grabbed edges (EOnyxMapEdge flags), where the drag started and the change so far. */
+	int32 GrabbedMapEdges = 0;
+	FVector2D MapGrabLocal = FVector2D::ZeroVector;
+	FOnyxMapEdges DraggedEdges;
 };

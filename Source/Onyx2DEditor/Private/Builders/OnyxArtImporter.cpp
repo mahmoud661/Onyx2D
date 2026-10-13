@@ -1023,7 +1023,8 @@ bool FOnyxArtImporter::Build(FOnyxArtItem& Item, const FOnyxArtImportSettings& S
 			UPaperSprite* First = nullptr;
 			for (int32 Index = 0; Index < Item.Regions.Num(); ++Index)
 			{
-				const FIntRect& Region = Item.Regions[Index];
+				// Each sprite stands on its lowest visible pixel.
+				const FIntRect Region = FOnyxImageAnalysis::CropToFeet(Texture, { Item.Regions[Index] })[0];
 				if (UPaperSprite* Sprite = FOnyxAssetUtils::CreateSprite(Folder, FString::Printf(TEXT("S_%s_%d"), *Name, Index + 1), Texture, Region.Min,
 					Region.Size(), PixelsPerUnit, ESpritePivotMode::Bottom_Center))
 				{
@@ -1038,8 +1039,9 @@ bool FOnyxArtImporter::Build(FOnyxArtItem& Item, const FOnyxArtImportSettings& S
 		if (Item.Animations.IsEmpty())
 		{
 			UTexture2D* Texture = FOnyxAssetUtils::ImportTexture(Item.ImageFile, Folder, TEXT("T_") + Name);
-			UPaperSprite* Sprite = Texture ? FOnyxAssetUtils::CreateSprite(Folder, TEXT("S_") + Name, Texture, FIntPoint::ZeroValue,
-				FIntPoint(Texture->Source.GetSizeX(), Texture->Source.GetSizeY()), PixelsPerUnit, ESpritePivotMode::Bottom_Center) : nullptr;
+			const FIntRect Whole = Texture ? FOnyxImageAnalysis::CropToFeet(Texture, { FIntRect(FIntPoint::ZeroValue, FIntPoint(Texture->Source.GetSizeX(), Texture->Source.GetSizeY())) })[0] : FIntRect();
+			UPaperSprite* Sprite = Texture ? FOnyxAssetUtils::CreateSprite(Folder, TEXT("S_") + Name, Texture, Whole.Min, Whole.Size(), PixelsPerUnit,
+				ESpritePivotMode::Bottom_Center) : nullptr;
 			if (!Sprite)
 			{
 				OutError = FText::Format(INVTEXT("Could not make a sprite from {0}."), FText::FromString(FPaths::GetCleanFilename(Item.ImageFile)));
@@ -1069,10 +1071,16 @@ bool FOnyxArtImporter::Build(FOnyxArtItem& Item, const FOnyxArtImportSettings& S
 		}
 		TArray<UPaperSprite*> Sprites;
 		TArray<UPackage*> Packages = { Strip->GetPackage() };
+		TArray<FIntRect> FrameRects;
+		for (int32 Index = 0; Index < Frames.Num(); ++Index)
+		{
+			FrameRects.Add(FIntRect(FIntPoint(Index * Cell.X, 0), FIntPoint((Index + 1) * Cell.X, Cell.Y)));
+		}
+		FrameRects = FOnyxImageAnalysis::CropToFeet(Strip, FrameRects); // the animation stands on its feet line
 		for (int32 Index = 0; Index < Frames.Num(); ++Index)
 		{
 			if (UPaperSprite* Sprite = FOnyxAssetUtils::CreateSprite(Folder / TEXT("Frames"), FString::Printf(TEXT("S_%s_%d"), *Name, Index + 1), Strip,
-				FIntPoint(Index * Cell.X, 0), Cell, PixelsPerUnit, ESpritePivotMode::Bottom_Center))
+				FrameRects[Index].Min, FrameRects[Index].Size(), PixelsPerUnit, ESpritePivotMode::Bottom_Center))
 			{
 				Sprites.Add(Sprite);
 				Packages.Add(Sprite->GetPackage());

@@ -7,6 +7,7 @@
 #include "Combat/OnyxCombatTypes.h"
 #include "OnyxCombatLibrary.generated.h"
 
+/** Blueprint helpers for damage and teams. */
 UCLASS()
 class ONYX2DRUNTIME_API UOnyxCombatLibrary : public UBlueprintFunctionLibrary
 {

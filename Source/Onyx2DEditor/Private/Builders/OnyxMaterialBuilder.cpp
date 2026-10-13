@@ -6,12 +6,22 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "MaterialEditingLibrary.h"
 #include "MaterialExpressionSpriteTextureSampler.h"
+#include "Misc/FileHelper.h"
+#include "Misc/PackageName.h"
+#include "Core/Onyx2DTypes.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionAppendVector.h"
 #include "Materials/MaterialExpressionCollectionParameter.h"
 #include "Materials/MaterialExpressionComponentMask.h"
 #include "Materials/MaterialExpressionConstant2Vector.h"
 #include "Materials/MaterialExpressionConstant3Vector.h"
+#include "Materials/MaterialExpressionTransform.h"
+#include "Materials/MaterialExpressionNormalize.h"
+#include "Materials/MaterialExpressionIsOrthographic.h"
+#include "Materials/MaterialExpressionCameraPositionWS.h"
+#include "Materials/MaterialExpressionWorldPosition.h"
+#include "Materials/MaterialExpressionObjectPositionWS.h"
+#include "Materials/MaterialExpressionAdd.h"
 #include "Materials/MaterialExpressionCustom.h"
 #include "Materials/MaterialExpressionDivide.h"
 #include "Materials/MaterialExpressionLength.h"
@@ -133,11 +143,44 @@ alpha *= inside;
 return float4(col * Tint.rgb, alpha);
 )HLSL");
 
-	/** Splash droplets: round, soft-edged dots in their vertex colour. */
+	/**
+	 * Water particles in their vertex colour, all anti-aliased. Kind picks the shape: 0 a soft round splash droplet, 1 a
+	 * bubble (thin ring, faint inside, highlight at the top left), 2 a pulse ring, 3 a lumpy patch of foam, 4 a streak of
+	 * churned water (UV.y runs from its head to its tail), 5 a soft cloud of silt. Seed varies the foam's lumps, and for a
+	 * ring is where the water's surface cuts across it (nothing above).
+	 */
 	const TCHAR* DropHLSL = TEXT(R"HLSL(
 float r = length(UV - 0.5) * 2.0;
 float edge = max(fwidth(r), 0.001);
-float a = saturate((1.0 - r) / edge);
+float disc = saturate((1.0 - r) / edge);
+float a = disc;
+if (Kind > 0.5 && Kind < 1.5)
+{
+    float rim = saturate(1.0 - abs(r - 0.8) / max(0.18, edge * 1.5));
+    float highlight = saturate(1.0 - length(UV - float2(0.36, 0.34)) / 0.16);
+    a = max(max(rim, disc * 0.15), highlight) * disc;
+}
+else if (Kind > 1.5 && Kind < 2.5)
+{
+    // Only below the surface (Seed: where it cuts across), softly at the cut.
+    a = saturate(1.0 - abs(r - 0.86) / max(0.07, edge * 1.5)) * disc * saturate((UV.y - Seed) / max(fwidth(UV.y) * 2.0, 0.0001));
+}
+else if (Kind > 2.5 && Kind < 3.5)
+{
+    float angle = atan2(UV.y - 0.5, UV.x - 0.5);
+    float outline = 0.8 + 0.1 * sin(angle * 5.0 + Seed * 6.283) + 0.08 * sin(angle * 9.0 - Seed * 11.0);
+    a = smoothstep(outline, outline * 0.5, r) * (0.8 + 0.2 * sin(UV.x * 21.0 + Seed * 40.0) * sin(UV.y * 15.0 + Seed * 9.0));
+}
+else if (Kind > 3.5 && Kind < 4.5)
+{
+    float across = 1.0 - abs(UV.x * 2.0 - 1.0);
+    float along = 1.0 - UV.y;
+    a = smoothstep(0.0, 0.7, across) * pow(saturate(sin(along * 3.14159)), 0.6);
+}
+else if (Kind > 4.5)
+{
+    a = pow(saturate(1.0 - r), 1.6);
+}
 return float4(ColorRGB * Tint.rgb, ColorA * a);
 )HLSL");
 
@@ -150,6 +193,57 @@ return float4(ColorRGB * Tint.rgb, ColorA * a);
 		T* Add(int32 X, int32 Y)
 		{
 			return CastChecked<T>(UMaterialEditingLibrary::CreateMaterialExpression(Material, T::StaticClass(), X, Y));
+		}
+
+		/**
+		 * The draw order (Onyx Draw Order subsystem, custom primitive data) as a world position offset straight towards
+		 * the camera: the sprite gets its own depth, and moving along the view ray keeps it exactly where it is on screen.
+		 * bFlatten first lays a mesh flat on the plane through its origin (placeholder cubes are a few cm deep, which would
+		 * otherwise reach past the draw order of the sprites around them); from the side camera it looks the same.
+		 */
+		void DrawOrderOffset(int32 X, int32 Y, bool bFlatten = false)
+		{
+			UMaterialExpressionScalarParameter* Order = Scalar(TEXT("DrawOrder"), 0.f, X, Y);
+			Order->bUseCustomPrimitiveData = true;
+			Order->PrimitiveDataIndex = uint8(Onyx2D::DrawOrderDataIndex);
+			// Towards the camera, in the vertex shader: along the view ray in perspective (the vertex stays on its ray, so
+			// on the same screen pixel), along the view axis in orthographic (every ray is parallel to it).
+			UMaterialExpressionSubtract* Ray = Add<UMaterialExpressionSubtract>(X - 300, Y - 260);
+			Link(Add<UMaterialExpressionCameraPositionWS>(X - 600, Y - 300), FString(), Ray, TEXT("A"));
+			Link(Add<UMaterialExpressionWorldPosition>(X - 600, Y - 200), FString(), Ray, TEXT("B"));
+			UMaterialExpressionNormalize* RayDirection = Add<UMaterialExpressionNormalize>(X - 100, Y - 260);
+			Link(Ray, FString(), RayDirection, FString());
+			UMaterialExpressionConstant3Vector* ViewBack = Add<UMaterialExpressionConstant3Vector>(X - 600, Y - 100);
+			ViewBack->Constant = FLinearColor(0.f, 0.f, -1.f);
+			UMaterialExpressionTransform* AxisToCamera = Add<UMaterialExpressionTransform>(X - 300, Y - 100);
+			AxisToCamera->TransformSourceType = TRANSFORMSOURCE_View;
+			AxisToCamera->TransformType = TRANSFORM_World;
+			Link(ViewBack, FString(), AxisToCamera, FString());
+			UMaterialExpressionLinearInterpolate* ToCamera = Add<UMaterialExpressionLinearInterpolate>(X + 100, Y - 180);
+			Link(RayDirection, FString(), ToCamera, TEXT("A"));
+			Link(AxisToCamera, FString(), ToCamera, TEXT("B"));
+			Link(Add<UMaterialExpressionIsOrthographic>(X - 300, Y + 20), FString(), ToCamera, TEXT("Alpha"));
+			UMaterialExpressionMultiply* Offset = Add<UMaterialExpressionMultiply>(X + 300, Y + 60);
+			Link(ToCamera, FString(), Offset, TEXT("A"));
+			Link(Order, FString(), Offset, TEXT("B"));
+			if (!bFlatten)
+			{
+				Out(Offset, FString(), MP_WorldPositionOffset);
+				return;
+			}
+			// (0, ObjectY - VertexY, 0): every vertex onto the plane through the object's origin.
+			UMaterialExpressionSubtract* ToPlane = Add<UMaterialExpressionSubtract>(X + 300, Y + 260);
+			Link(Add<UMaterialExpressionObjectPositionWS>(X, Y + 240), FString(), ToPlane, TEXT("A"));
+			Link(Add<UMaterialExpressionWorldPosition>(X, Y + 340), FString(), ToPlane, TEXT("B"));
+			UMaterialExpressionConstant3Vector* DepthAxis = Add<UMaterialExpressionConstant3Vector>(X, Y + 440);
+			DepthAxis->Constant = FLinearColor(0.f, 1.f, 0.f);
+			UMaterialExpressionMultiply* Flatten = Add<UMaterialExpressionMultiply>(X + 500, Y + 300);
+			Link(ToPlane, FString(), Flatten, TEXT("A"));
+			Link(DepthAxis, FString(), Flatten, TEXT("B"));
+			UMaterialExpressionAdd* Total = Add<UMaterialExpressionAdd>(X + 700, Y + 160);
+			Link(Flatten, FString(), Total, TEXT("A"));
+			Link(Offset, FString(), Total, TEXT("B"));
+			Out(Total, FString(), MP_WorldPositionOffset);
 		}
 
 		UMaterialExpressionScalarParameter* Scalar(FName Name, float Value, int32 X, int32 Y)
@@ -265,10 +359,15 @@ return float4(ColorRGB * Tint.rgb, ColorA * a);
 		return Placeholder;
 	}
 
+	bool IsOutdated(const TCHAR* Name, FName Parameter);
+
+	/** The parameter that marks materials built with the draw order. */
+	const FName DrawOrderMarker(TEXT("DrawOrder"));
+
 	void BuildSolid(bool bRebuild, TArray<FString>& Built)
 	{
 		// Lit solid colour: placeholders, level builder blocks, hazards.
-		UMaterial* Material = BeginMaterial(TEXT("M_OnyxSolid"), bRebuild);
+		UMaterial* Material = BeginMaterial(TEXT("M_OnyxSolid"), bRebuild || IsOutdated(TEXT("M_OnyxSolid"), DrawOrderMarker));
 		if (!Material)
 		{
 			return;
@@ -276,6 +375,7 @@ return float4(ColorRGB * Tint.rgb, ColorA * a);
 		FGraph Graph{ Material };
 		Graph.Out(Graph.Vector(TEXT("Color"), FLinearColor(0.5f, 0.5f, 0.5f), -400, -100), FString(), MP_BaseColor);
 		Graph.Out(Graph.Scalar(TEXT("Roughness"), 0.85f, -400, 150), FString(), MP_Roughness);
+		Graph.DrawOrderOffset(-1200, 300, true);
 		Material->bUsedWithInstancedStaticMeshes = true;
 		FinishMaterial(Material, Built);
 	}
@@ -329,7 +429,7 @@ return float4(ColorRGB * Tint.rgb, ColorA * a);
 	void BuildGlow(bool bRebuild, TArray<FString>& Built)
 	{
 		// Unlit glowing colour: pickups and effects that must read in the dark.
-		UMaterial* Material = BeginMaterial(TEXT("M_OnyxGlow"), bRebuild);
+		UMaterial* Material = BeginMaterial(TEXT("M_OnyxGlow"), bRebuild || IsOutdated(TEXT("M_OnyxGlow"), DrawOrderMarker));
 		if (!Material)
 		{
 			return;
@@ -340,15 +440,49 @@ return float4(ColorRGB * Tint.rgb, ColorA * a);
 		Graph.Link(Graph.Vector(TEXT("Color"), FLinearColor(1.f, 0.75f, 0.15f), -500, -50), FString(), Glow, TEXT("A"));
 		Graph.Link(Graph.Scalar(TEXT("Intensity"), 1.5f, -500, 150), FString(), Glow, TEXT("B"));
 		Graph.Out(Glow, FString(), MP_EmissiveColor);
+		Graph.DrawOrderOffset(-1200, 300, true);
 		FinishMaterial(Material, Built);
 	}
 
 	/** True when a plugin material exists but predates a parameter (rebuild it). */
+	/** True when the material exists but lacks the scalar parameter that marks the current version of its graph. */
 	bool IsOutdated(const TCHAR* Name, FName Parameter)
 	{
 		const UMaterial* Existing = LoadPluginAsset<UMaterial>(Name);
-		float Value = 0.f;
-		return Existing && !Existing->GetScalarParameterDefaultValue(FHashedMaterialParameterInfo(Parameter), Value);
+		if (!Existing)
+		{
+			return false;
+		}
+		for (const UMaterialExpression* Expression : Existing->GetExpressions())
+		{
+			if (const UMaterialExpressionScalarParameter* Scalar = Cast<UMaterialExpressionScalarParameter>(Expression); Scalar && Scalar->ParameterName == Parameter)
+			{
+				return false;
+			}
+		}
+		if (!Existing->GetExpressions().IsEmpty())
+		{
+			return true; // the graph is loaded and the marker isn't in it
+		}
+		// A commandlet can load the plugin's materials before editor-only data is on, so the graph isn't in memory:
+		// look for the marker in the saved package's names instead.
+		FString File;
+		TArray<uint8> Bytes;
+		if (!FPackageName::TryConvertLongPackageNameToFilename(Existing->GetPackage()->GetName(), File, FPackageName::GetAssetPackageExtension())
+			|| !FFileHelper::LoadFileToArray(Bytes, *File))
+		{
+			return true;
+		}
+		const FTCHARToUTF8 Marker(*Parameter.ToString());
+		const int32 Length = Marker.Length();
+		for (int32 Index = 0; Index + Length <= Bytes.Num(); ++Index)
+		{
+			if (FMemory::Memcmp(Bytes.GetData() + Index, Marker.Get(), Length) == 0)
+			{
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/** Unlit translucent, drawn after the 2D lighting composite (which runs before depth of field) so it is not lit twice. */
@@ -409,15 +543,21 @@ return float4(ColorRGB * Tint.rgb, ColorA * a);
 
 	void BuildWaterDrop(bool bRebuild, TArray<FString>& Built)
 	{
-		UMaterial* Material = BeginMaterial(TEXT("M_OnyxWaterDrop"), bRebuild);
+		UMaterial* Material = BeginMaterial(TEXT("M_OnyxWaterDrop"), bRebuild || IsOutdated(TEXT("M_OnyxWaterDrop"), TEXT("DropVersion4")));
 		if (!Material)
 		{
 			return;
 		}
 		SetupWaterSurface(Material);
 		FGraph Graph{ Material };
-		UMaterialExpressionCustom* Custom = AddCustom(Graph, DropHLSL, TEXT("Onyx Water Drop"), { TEXT("UV"), TEXT("ColorRGB"), TEXT("ColorA"), TEXT("Tint") });
+		UMaterialExpressionCustom* Custom = AddCustom(Graph, DropHLSL, TEXT("Onyx Water Drop"),
+			{ TEXT("UV"), TEXT("Kind"), TEXT("Seed"), TEXT("ColorRGB"), TEXT("ColorA"), TEXT("Tint"), TEXT("Version") });
 		Graph.Link(Graph.Add<UMaterialExpressionTextureCoordinate>(-900, -200), FString(), Custom, TEXT("UV"));
+		UMaterialExpressionTextureCoordinate* ShapeUV = Graph.Add<UMaterialExpressionTextureCoordinate>(-1100, -100);
+		ShapeUV->CoordinateIndex = 1; // UV1: x = the shape, y = its seed
+		Graph.Link(Graph.Mask(ShapeUV, true, false, false, false, -900, -100), FString(), Custom, TEXT("Kind"));
+		Graph.Link(Graph.Mask(ShapeUV, false, true, false, false, -900, -75), FString(), Custom, TEXT("Seed"));
+		Graph.Link(Graph.Scalar(TEXT("DropVersion4"), 1.f, -900, 300), FString(), Custom, TEXT("Version")); // marks this version (older ones are rebuilt)
 		UMaterialExpressionVertexColor* Vertex = Graph.Add<UMaterialExpressionVertexColor>(-900, -50);
 		Graph.Link(Vertex, FString(), Custom, TEXT("ColorRGB"));
 		Graph.Link(Vertex, TEXT("A"), Custom, TEXT("ColorA"));
@@ -430,7 +570,7 @@ return float4(ColorRGB * Tint.rgb, ColorA * a);
 	{
 		// Lit sprite with normal map. Paper2D swaps "SpriteTexture" for the sprite's sheet and
 		// "SpriteAdditionalTexture_0" for its Additional Textures slot 0 (the normal map).
-		UMaterial* Material = BeginMaterial(TEXT("M_OnyxLitSprite"), bRebuild);
+		UMaterial* Material = BeginMaterial(TEXT("M_OnyxLitSprite"), bRebuild || IsOutdated(TEXT("M_OnyxLitSprite"), DrawOrderMarker));
 		if (!Material)
 		{
 			return;
@@ -472,6 +612,7 @@ return float4(ColorRGB * Tint.rgb, ColorA * a);
 		Graph.Out(Strength, FString(), MP_Normal);
 		Graph.Out(Graph.Scalar(TEXT("Roughness"), 0.8f, -550, 550), FString(), MP_Roughness);
 		Graph.Out(Graph.Scalar(TEXT("Specular"), 0.3f, -550, 650), FString(), MP_Specular);
+		Graph.DrawOrderOffset(-900, 900);
 		FinishMaterial(Material, Built);
 	}
 

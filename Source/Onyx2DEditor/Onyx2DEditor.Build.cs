@@ -10,7 +10,7 @@ public class Onyx2DEditor : ModuleRules
 		{
 			"Core", "CoreUObject", "Engine", "InputCore", "UnrealEd", "Slate", "SlateCore", "ToolMenus",
 			"Paper2D", "PropertyEditor", "AssetRegistry", "LevelEditor", "WorkspaceMenuStructure", "Settings",
-			"Projects", "Onyx2DRuntime", "ContentBrowser", "PlacementMode", "MessageLog", "EditorFramework", "EngineSettings", "ToolWidgets", "AssetTools", "EditorWidgets", "Json", "MaterialEditor", "ImageCore", "DesktopPlatform", "GameProjectGeneration", "AssetDefinition"
+			"Projects", "Onyx2DRuntime", "Onyx2DUI", "ContentBrowser", "PlacementMode", "MessageLog", "EditorFramework", "EngineSettings", "ToolWidgets", "AssetTools", "EditorWidgets", "Json", "MaterialEditor", "ImageCore", "DesktopPlatform", "GameProjectGeneration", "AssetDefinition", "BlueprintGraph", "EnhancedInput", "Kismet", "UMG", "UMGEditor"
 		});
 	}
 }

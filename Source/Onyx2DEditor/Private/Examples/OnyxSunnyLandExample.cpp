@@ -602,3 +602,37 @@ bool FOnyxSunnyLandExample::Build(FText& OutError)
 	FBuilder Builder(GetPackFolder());
 	return Builder.Run(OutError);
 }
+
+void FOnyxSunnyLandExample::AddScenery(UWorld* World, UTexture2D* Back, UTexture2D* Middle)
+{
+	const FBox Area = FOnyxLevelTools::GetLevelBounds2D(World);
+	if (Back && Middle && Area.IsValid)
+	{
+		AOnyxParallaxBackground* Background = World->SpawnActor<AOnyxParallaxBackground>(AOnyxParallaxBackground::StaticClass(),
+			FTransform(FVector(Area.GetCenter().X, 0.f, Area.GetCenter().Z)));
+		Background->SetActorLabel(TEXT("Parallax"));
+		Background->BackgroundLayers.Reset();
+		FOnyxParallaxLayer Sky;
+		Sky.Name = TEXT("Sky and sea");
+		Sky.Texture = Back;
+		Sky.Factor = FVector2D(0.9f, 0.9f);
+		Sky.Depth = 2500.f;
+		Sky.Height = 2200.f;
+		Background->BackgroundLayers.Add(Sky);
+		FOnyxParallaxLayer Jungle;
+		Jungle.Name = TEXT("Jungle");
+		Jungle.Texture = Middle;
+		Jungle.Factor = FVector2D(0.6f, 0.7f);
+		Jungle.Depth = 1200.f;
+		Jungle.Height = 1500.f;
+		// Low enough that the sky's horizon never peeks out between the jungle's bottom edge and the ground.
+		Jungle.OffsetZ = -900.f;
+		Background->BackgroundLayers.Add(Jungle);
+		Background->RerunConstructionScripts();
+	}
+	for (TActorIterator<AOnyxLightingEnvironment> It(World); It; ++It)
+	{
+		It->Preset = EOnyxMoodPreset::Day;
+		It->Mood = FOnyxLightingMood::FromPreset(EOnyxMoodPreset::Day);
+	}
+}

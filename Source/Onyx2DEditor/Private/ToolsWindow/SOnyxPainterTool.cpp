@@ -34,6 +34,7 @@
 #include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SGridPanel.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSplitter.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
@@ -674,7 +675,8 @@ TSharedRef<SWidget> SOnyxPainterTool::MakeCanvasArea()
 		.SelectedActor_Lambda([this]() { return SelectedActor; })
 		.OnStroke(this, &SOnyxPainterTool::HandleStroke)
 		.OnKey(this, &SOnyxPainterTool::HandleKey)
-		.OnQueryCursor(this, &SOnyxPainterTool::GetCursorFor);
+		.OnQueryCursor(this, &SOnyxPainterTool::GetCursorFor)
+		.OnResizeMap(this, &SOnyxPainterTool::ResizeMapEdges);
 
 	return SNew(SOverlay)
 		+ SOverlay::Slot()
@@ -764,23 +766,95 @@ TSharedRef<SWidget> SOnyxPainterTool::MakeInspector()
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 0.f, 4.f, 0.f)
 				[
-					SNew(SSpinBox<int32>).MinValue(1).MaxValue(1024)
+					SNew(SSpinBox<int32>).MinValue(1).MaxValue(FOnyxMapPainter::MaxMapSize)
 					.Value_Lambda([this]() { return NewSize.X; })
 					.OnValueChanged_Lambda([this](int32 V) { NewSize.X = V; })
 				]
 				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 0.f, 4.f, 0.f)
 				[
-					SNew(SSpinBox<int32>).MinValue(1).MaxValue(1024)
+					SNew(SSpinBox<int32>).MinValue(1).MaxValue(FOnyxMapPainter::MaxMapSize)
 					.Value_Lambda([this]() { return NewSize.Y; })
 					.OnValueChanged_Lambda([this](int32 V) { NewSize.Y = V; })
 				]
 				+ SHorizontalBox::Slot().AutoWidth()
 				[
 					SNew(SButton)
-					.Text(INVTEXT("Resize"))
+					.Text(INVTEXT("Apply"))
+					.ToolTipText(INVTEXT("Columns come and go on the right, rows at the top, so the ground stays where it is"))
 					.IsEnabled_Lambda([this]() { return Painter.GetTileMap() && NewSize != Painter.GetMapSize(); })
-					.OnClicked_Lambda([this]() { Painter.Resize(NewSize); Canvas->RequestFit(); return FReply::Handled(); })
+					.OnClicked_Lambda([this]()
+					{
+						ResizeMapEdges(FOnyxMapEdges::KeepBottomLeft(Painter.GetMapSize(), NewSize));
+						Canvas->RequestFit();
+						return FReply::Handled();
+					})
 				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(10.f, 12.f, 10.f, 4.f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+				[
+					SNew(STextBlock).Text(INVTEXT("Grow or shrink a side")).Font(Font(9, true))
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 6.f, 0.f)
+				[
+					SNew(STextBlock).Text(INVTEXT("by")).Font(Font(9)).ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SBox).WidthOverride(56.f)
+					[
+						SNew(SSpinBox<int32>).MinValue(1).MaxValue(256)
+						.ToolTipText(INVTEXT("Cells each + or - button adds or removes"))
+						.Value_Lambda([this]() { return EdgeStep; })
+						.OnValueChanged_Lambda([this](int32 V) { EdgeStep = FMath::Max(V, 1); })
+					]
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(10.f, 2.f)
+			[
+				// The four sides around the map's size, where they are on the map.
+				SNew(SGridPanel)
+				.FillColumn(0, 1.f)
+				.FillColumn(2, 1.f)
+				+ SGridPanel::Slot(1, 0).Padding(2.f)
+				[
+					MakeEdgeButtons(INVTEXT("Top"), INVTEXT("at the top"), &FOnyxMapEdges::Top, false)
+				]
+				+ SGridPanel::Slot(0, 1).Padding(2.f)
+				[
+					MakeEdgeButtons(INVTEXT("Left"), INVTEXT("on the left"), &FOnyxMapEdges::Left, true)
+				]
+				+ SGridPanel::Slot(1, 1).Padding(2.f)
+				[
+					SNew(SBorder)
+					.BorderImage(FAppStyle::GetBrush("Brushes.Recessed"))
+					.HAlign(HAlign_Center)
+					.VAlign(VAlign_Center)
+					.Padding(FMargin(4.f, 6.f))
+					[
+						SNew(STextBlock)
+						.Font(Font(9, true))
+						.Text_Lambda([this]()
+						{
+							const FIntPoint Size = Painter.GetMapSize();
+							return Painter.GetTileMap() ? FText::Format(INVTEXT("{0} x {1}"), Size.X, Size.Y) : INVTEXT("-");
+						})
+					]
+				]
+				+ SGridPanel::Slot(2, 1).Padding(2.f)
+				[
+					MakeEdgeButtons(INVTEXT("Right"), INVTEXT("on the right"), &FOnyxMapEdges::Right, true)
+				]
+				+ SGridPanel::Slot(1, 2).Padding(2.f)
+				[
+					MakeEdgeButtons(INVTEXT("Bottom"), INVTEXT("at the bottom"), &FOnyxMapEdges::Bottom, false)
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(10.f, 4.f, 10.f, 0.f)
+			[
+				Hint(INVTEXT("Or drag the map's border on the canvas. Whatever you change, what you painted stays where it is in the level: tiles, objects, water and zones."))
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(10.f, 8.f)
 			[
@@ -799,7 +873,7 @@ TSharedRef<SWidget> SOnyxPainterTool::MakeInspector()
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(10.f, 0.f, 10.f, 10.f)
 			[
-				Hint(INVTEXT("Left drag: use tool · Right drag: erase\nMiddle drag or Space + drag: pan · Wheel: zoom\nB brush · R rectangle · F fill · E erase · I pick · S select\nG grid · Home fit · Del delete object\n\nSelect an object to edit it here."))
+				Hint(INVTEXT("Left drag: use tool · Right drag: erase\nMiddle drag or Space + drag: pan · Wheel: zoom\nDrag the map's border: grow or shrink it\nB brush · R rectangle · F fill · E erase · I pick · S select\nG grid · Home fit · Del delete object\n\nSelect an object to edit it here."))
 			]
 		];
 
@@ -821,7 +895,7 @@ void SOnyxPainterTool::SetTileMap(UPaperTileMap* TileMap)
 	bWarnedNoActor = false;
 	if (TileMap)
 	{
-		NewSize = Painter.GetMapSize();
+		NewSize = MapSizeSeen = Painter.GetMapSize();
 		UPaperTileSet* MapTileSet = TileMap->SelectedTileSet.Get();
 		for (int32 LayerIndex = 0; !MapTileSet && LayerIndex < TileMap->TileLayers.Num(); ++LayerIndex)
 		{
@@ -984,7 +1058,7 @@ void SOnyxPainterTool::RefreshBrushes()
 	{
 		for (const TSharedRef<FOnyxPainterBrush>& Brush : FOnyxBrushLibrary::Get().GetBrushes())
 		{
-			if (Brush->bCustom == bCustom)
+			if (Brush->bCustom == bCustom && !Brush->bHiddenInPalette)
 			{
 				BrushItems.Add(Brush);
 			}
@@ -1224,6 +1298,78 @@ TOptional<EMouseCursor::Type> SOnyxPainterTool::GetCursorFor(FVector2D MapPixels
 		return EMouseCursor::ResizeUpDown;
 	}
 	return {};
+}
+
+TSharedRef<SWidget> SOnyxPainterTool::MakeEdgeButtons(const FText& Side, const FText& Where, int32 FOnyxMapEdges::* Edge, bool bColumns)
+{
+	auto EdgesFor = [this, Edge](int32 Sign)
+	{
+		FOnyxMapEdges Edges;
+		Edges.*Edge = Sign * EdgeStep;
+		return Edges;
+	};
+	auto Button = [this, Where, bColumns, EdgesFor](int32 Sign) -> TSharedRef<SWidget>
+	{
+		return SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ContentPadding(FMargin(3.f))
+			.ToolTipText_Lambda([this, Where, bColumns, Sign]()
+			{
+				const FText Unit = bColumns ? (EdgeStep == 1 ? INVTEXT("column") : INVTEXT("columns")) : (EdgeStep == 1 ? INVTEXT("row") : INVTEXT("rows"));
+				return FText::Format(INVTEXT("{0} {1} {2} {3}"), Sign > 0 ? INVTEXT("Add") : INVTEXT("Remove"), EdgeStep, Unit, Where);
+			})
+			.IsEnabled_Lambda([this, EdgesFor, Sign]()
+			{
+				const FIntPoint Size = EdgesFor(Sign).Apply(Painter.GetMapSize());
+				return Painter.GetTileMap() && Size.X >= 1 && Size.Y >= 1 && Size.X <= FOnyxMapPainter::MaxMapSize && Size.Y <= FOnyxMapPainter::MaxMapSize;
+			})
+			.OnClicked_Lambda([this, EdgesFor, Sign]()
+			{
+				ResizeMapEdges(EdgesFor(Sign));
+				return FReply::Handled();
+			})
+			[
+				SNew(SImage)
+				.Image(FAppStyle::GetBrush(Sign > 0 ? "Icons.Plus" : "Icons.Minus"))
+				.ColorAndOpacity(FSlateColor::UseForeground())
+			];
+	};
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			Button(-1)
+		]
+		+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center).VAlign(VAlign_Center)
+		[
+			SNew(STextBlock).Text(Side).Font(Font(9))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			Button(1)
+		];
+}
+
+void SOnyxPainterTool::ResizeMapEdges(const FOnyxMapEdges& Edges)
+{
+	auto CountObjects = [this]()
+	{
+		int32 Count = 0;
+		Painter.ForEachObject([&Count](const FOnyxPlacedObject&) { ++Count; });
+		return Count;
+	};
+	const int32 ObjectsBefore = CountObjects();
+	if (!Painter.ResizeEdges(Edges))
+	{
+		return;
+	}
+	NewSize = MapSizeSeen = Painter.GetMapSize();
+	RectStart.Reset();
+	// Objects stay where they are in the level, so cutting a side can leave some off the map.
+	const int32 LeftOut = ObjectsBefore - CountObjects();
+	if (LeftOut > 0)
+	{
+		Notify(FText::Format(INVTEXT("{0} {0}|plural(one=object is,other=objects are) off the map now (still in the level). Undo, or grow that side back to see {0}|plural(one=it,other=them) again."), LeftOut), false);
+	}
 }
 
 void SOnyxPainterTool::ApplyRect(const FIntRect& Rect, bool bErase)
@@ -1604,10 +1750,16 @@ void SOnyxPainterTool::Save()
 
 void SOnyxPainterTool::HandleObjectTransacted(UObject* Object, const FTransactionObjectEvent& Event)
 {
+	if (Object && Object == Painter.GetTileMap() && Painter.GetMapSize() != MapSizeSeen)
+	{
+		NewSize = MapSizeSeen = Painter.GetMapSize();
+	}
 	if (Event.GetEventType() == ETransactionObjectEventType::UndoRedo && Object == Painter.GetTileMap())
 	{
 		Painter.SetLayer(Painter.GetLayer());
 		RefreshLayers();
+		// The map's cells came back, but the collision built from them isn't part of the undo.
+		FOnyxMapPainter::RebuildLevelCollision();
 	}
 }
 

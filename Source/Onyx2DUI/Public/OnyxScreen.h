@@ -17,6 +17,7 @@ class UTextBlock;
 class UTexture2D;
 class UVerticalBox;
 
+/** One entry of a screen's menu, as built by the screen (its button and label). */
 USTRUCT()
 struct FOnyxMenuEntry
 {
@@ -61,6 +62,10 @@ struct FOnyxFramedButton
  * Base for Onyx UI screens. The widget tree is built in code (BuildUI) so screens work with no
  * assets; subclass in C++ or Blueprint to change content. Provides animated menu entries,
  * keyboard/gamepad navigation, focus recovery, a confirm dialog and the settings overlay.
+ *
+ * A Widget Blueprint child with a layout of its own (the Designer) skips BuildUI: it has no built-in menu entries and no
+ * confirm box, so its buttons call the screen's functions (Open Settings, Start Game, Resume...) and actions that would
+ * ask "Are you sure?" happen straight away. Name a panel MenuContent to have it hidden while settings are open.
  */
 UCLASS(Abstract)
 class ONYX2DUI_API UOnyxScreen : public UUserWidget
@@ -109,6 +114,8 @@ protected:
 	bool IsDialogOpen() const { return bDialogOpen; }
 
 	// --- settings overlay ---
+	/** Opens the settings screen over this one (for a Settings button of a layout of your own). */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|UI")
 	void OpenSettings();
 	bool IsSettingsOpen() const { return ActiveSettings != nullptr; }
 	virtual void OnSettingsClosed();
@@ -123,7 +130,7 @@ protected:
 	TArray<FOnyxMenuEntry> Entries;
 
 	/** Hidden while settings are open, disabled while a dialog is open. */
-	UPROPERTY(Transient)
+	UPROPERTY(BlueprintReadOnly, Category = "Screen", meta = (BindWidgetOptional))
 	TObjectPtr<UWidget> MenuContent;
 
 	UPROPERTY(Transient)

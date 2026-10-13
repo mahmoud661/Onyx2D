@@ -531,9 +531,16 @@ FReply SOnyxSpriteSlicer::Create()
 	}
 	TArray<UPaperSprite*> Sprites;
 	const float PixelsPerUnit = 1.f / FMath::Max(CentimetersPerPixel, 0.01f);
+	// The clip's frames end at its feet line, so the character stands on its feet.
+	TArray<FIntRect> FrameRects;
 	for (int32 Index = 0; Index < Canvas->Selection.Num(); ++Index)
 	{
-		const FIntRect Rect = Canvas->CellRect(Canvas->Selection[Index]);
+		FrameRects.Add(Canvas->CellRect(Canvas->Selection[Index]));
+	}
+	FrameRects = FOnyxImageAnalysis::CropToFeet(Texture, FrameRects);
+	for (int32 Index = 0; Index < Canvas->Selection.Num(); ++Index)
+	{
+		const FIntRect Rect = FrameRects[Index];
 		if (UPaperSprite* Sprite = FOnyxAssetUtils::CreateSprite(Folder / TEXT("Sprites"), FString::Printf(TEXT("S_%s_%s_%02d"), *Prefix, *Anim, Index), Texture,
 			Rect.Min, Rect.Size(), PixelsPerUnit, ESpritePivotMode::Bottom_Center))
 		{

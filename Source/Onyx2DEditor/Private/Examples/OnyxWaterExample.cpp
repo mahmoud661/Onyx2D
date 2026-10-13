@@ -184,10 +184,10 @@ bool FOnyxWaterExample::Build(FText& OutError)
 		}
 	}
 
-	// The fox starts on the left bank.
+	// The fox starts high over the pool and dives straight in.
 	for (TActorIterator<APlayerStart> It(World); It; ++It)
 	{
-		It->SetActorLocation(Painter.CellToWorld(FIntPoint(5, 10)));
+		It->SetActorLocation(Painter.CellToWorld(FIntPoint(15, 2)));
 	}
 
 	// Sunny Land's sky and jungle behind, a sunny day.

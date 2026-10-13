@@ -12,17 +12,20 @@ class USphereComponent;
 class UStaticMeshComponent;
 class USoundBase;
 
+/** What a pickup gives when it is collected. */
 UENUM(BlueprintType)
 enum class EOnyxPickupType : uint8
 {
 	Coin,
-	Health
+	Health,
+	/** A named item, like a key: Trigger Zones can need it. */
+	Item
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnyxPickupSignature, AActor*, Collector);
 
 /**
- * Coin or health pickup that bobs in place and is collected on touch. Give it a flipbook (spinning gem,
+ * Coin, health or item (key) pickup that bobs in place and is collected on touch. Give it a flipbook (spinning gem,
  * cherry...) to replace the placeholder, and a collect effect to play where it disappears.
  */
 UCLASS(meta = (DisplayName = "Onyx Pickup"))
@@ -43,9 +46,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D")
 	EOnyxPickupType Type = EOnyxPickupType::Coin;
 
-	/** Coins added, or health restored. */
+	/** Coins added, health restored, or how many of the item. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D", meta = (ClampMin = "0"))
 	int32 Amount = 1;
+
+	/** The item's name. A Trigger Zone that needs it uses the same name. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D", meta = (EditCondition = "Type == EOnyxPickupType::Item", EditConditionHides))
+	FName ItemName = TEXT("Key");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D")
 	float BobHeight = 10.f;

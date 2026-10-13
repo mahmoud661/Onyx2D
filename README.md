@@ -11,6 +11,16 @@ Copy this folder into your project as `Plugins/Onyx2D`, open the project and the
    with the C++ game development workload).
 3. Run **Onyx2D → Configure Project for 2D** once: recommended renderer settings and the Onyx game mode as the default.
 
+**New here?** Press **Build Starter Game** on the Onyx2D window's Home tab: a small finished game (a meadow with a sign, a
+frog to talk to, enemies, a key and a locked gate) made only of Trigger Zones, Signs and the Talk behaviour, so you can open
+every piece and see how it works. The full documentation is a Next.js site in the `Onyx2D-Docs` repository; the editor's
+**Help** buttons open it (*Project Settings → Onyx2D → Docs Url*).
+
+**New to Unreal?** The docs' **Learn Unreal** course teaches the editor, levels and actors, Blueprints, C++, the gameplay
+framework, input, Paper2D, collision, debugging and packaging step by step, with screenshots and compiled C++. **Home →
+Build Learn Unreal Examples** builds what it makes, finished, in `Content/LearnUnreal`: `BP_HelloWorld`, the `BP_Spring`
+spring pad (its node graph built node by node), Onyx2D's controls as Enhanced Input assets and the `LU_Playground` level.
+
 ## Quick start: from art to a playable level
 
 1. **Art:** open the **Onyx2D** window, go to the **Import** tab and drop your PNGs or art folders on it. Tile sheets become
@@ -49,14 +59,19 @@ Copy this folder into your project as `Plugins/Onyx2D`, open the project and the
 | Prototyping | `AOnyxLevelBuilder` | **Type a level as text** (`#` block, `=` platform, `^` spikes, `~` water, `P` player, `E` enemy, `L` light, `C` coin, `H` health, `K` checkpoint, `X` exit, `M` moving platform) with live editor preview |
 | Patrols | `UOnyxPatrolComponent` | **Walk** (turn at walls / ledges, chase), **Hop** (frogs, slimes), **Fly** (birds, bats: hover, face the player); with Stompable they are defeated Mario-style |
 | Effects | `AOnyxFlipbookEffect` | Play any flipbook once at a spot (sparkles, puffs, explosions), centred whatever the sprites' pivot |
+| Logic without Blueprints | `AOnyxTriggerZone`, `UOnyxAction` | An invisible zone that runs a list of **actions** when the player enters, presses Interact, or the level starts: show a message, dialogue, play a sound, spawn an effect, teleport, show / hide, move, give coins / items / health, hurt, open a level, shake the camera, switch lights, launch, set a checkpoint, play music, call a Blueprint event, control other zones. It can **need an item** (a key) or coins first, with *Otherwise Actions*. Make your own action in Blueprint (*On Run*) or C++ |
+| Dialogue | `UOnyxDialogueSubsystem`, `AOnyxSign`, `UOnyxTalkComponent` | **Messages** (a banner that fades) and **conversations** (a box that types out each line, with speaker and portrait; the player can't move while reading). **Signs** to read, and the **Talk** behaviour for characters, with *Later Lines* and *After First Talk* actions |
+| Items | `UOnyxScoreSubsystem`, `AOnyxPickup` | Coins and named items (keys, gems) that last across levels; **Key** pickups (*Type: Item*) |
 | Game setup | `AOnyxGameMode`, `AOnyxPlayerController` | Works out of the box |
 | Settings | `UOnyxGameUserSettings` | Engine settings + master volume, brightness, mute when unfocused |
 
 ### UI module (`Onyx2DUI`)
 Built entirely in code, so it works with zero assets, and it is themeable in **Project Settings → Plugins → Onyx2D UI**.
 - Title screen, pause menu (with blur), settings screen (Display / Graphics / Audio / Controls), confirm dialogs.
-- HUD with health pips, dash cooldown and a coin counter that read the player's components automatically.
-- `UOnyxUISubsystem` shows the right screen per level: title in `MainMenuLevel`, HUD elsewhere, pause on the Pause input.
+- HUD with health pips, dash cooldown, a coin counter and held items that read the player's components automatically, and
+  the **Interact prompt** (`E  Read`) over the player when something usable is in reach.
+- A **dialogue box** and **message banner** for signs, conversations and messages (`UOnyxDialogueWidget`).
+- `UOnyxUISubsystem` shows the right screen per level: title in `MainMenuLevel`, HUD and dialogue box elsewhere, pause on the Pause input.
 - Full keyboard, mouse and gamepad navigation; swap any screen for a Blueprint subclass in the settings.
 
 ### Editor module (`Onyx2DEditor`) — the **Onyx2D** panel inside Unreal
@@ -73,7 +88,7 @@ and the layout is remembered. The console command `Onyx2D.Open <Tool>` (e.g. `On
 | **Import** | Drop PNG files or whole folders from the file explorer (or **Add Files / Add Folder**) and Onyx2D builds everything: tile sheets become padded, lit tile sets with collision (tile size, gaps and border detected from the file name, transparent gaps or tile edges); animations become a playable character (frame sequences `run-1.png, run-2.png...`, one strip per animation `idle.png, run.png`, or a sheet with one animation per row: words like *idle, run, jump, fall, attack, hurt, death, crouch, climb* pick the animation, the rest of the name or the folder groups files per character; all frames share one cell with the feet on one line); numbered frames without an animation word become animated sprites; prop sheets are cut into one sprite per prop; backgrounds become textures for the Parallax tab. Every guess is listed (type, name, tile size, Player/Enemy) and can be changed before **Build All**. Scripts can call `UOnyxEditorLibrary::ImportArt`. |
 | **Movesets** | The Moveset Editor. Left: the **Moveset**'s clips by role (missing standard roles, like Run or Hurt, are one click away). Middle: a big preview with transport controls (play, step, loop; sounds play while previewing) and the **timeline**: a block per frame as wide as its hold (drag the right edge to change it, drag to reorder, right-click to duplicate / delete) and event **lanes** (right-click to send a Message or add a Sound, Effect, Camera Shake, a Window or your own event at that time; drag to move, snaps to frames), a ruler to scrub (Ctrl + wheel zooms). Right: the clip's loop / frames per second / speed, the selected frame (hold, sprite) and the selected event. **New Clip** opens the sprite sheet slicer (detects the grid; click frames in play order or drag across a run). **New Character** makes a playable character from the moveset with the behaviours and team you pick. Double-clicking a Moveset or a Clip opens it here; everything is undoable. |
 | **Tiles** | Details panel for tile sheet, tile size, margin, spacing, collision and the map (size, scale, ground rows/tile). **Create Tile Set** / **Create Tile Map** (places the map and opens it in the Level Painter). The ground tile is outlined on the sheet. |
-| **Level Painter** | LDtk-style level editor. Characters, objects and decorations are drawn as they look in the level (their sprites and animations, playing), and every character Blueprint in the project is in the object palette. **Layers** on the left (the tile map's tile layers plus an **Entities** layer, each with an eye toggle), your **tile set palette** or the **entity palette** under them, a big canvas in the middle and an **Inspector** on the right. Tools: **Brush (B)**, **Rectangle (R)**, **Fill (F)**, **Erase (E)**, **Pick (I)**, **Select (S)**, **Terrain (T)** (auto-tiling); brush options **Flip X (X)**, **Flip Y (Y)** and **Random (V)** (each cell a random tile from the selected block); right-drag erases, middle-drag or Space+drag pans, the wheel zooms. Tiles go straight into the Paper2D tile map (with collision on Ground); entities (player start, patrolling foe, coin, health, checkpoint, exit, moving/one-way platform, hazard, light) are real actors placed on the cell, which you can drag around and edit in the Inspector; the canvas only shows the objects that sit on this map. **New Map** asks for a name, size and optional ground row, makes the map from the selected tile set and places it beside the maps already in the level. Everything is undoable. |
+| **Level Painter** | LDtk-style level editor. Characters, objects and decorations are drawn as they look in the level (their sprites and animations, playing), and every character Blueprint in the project is in the object palette. **Layers** on the left (the tile map's tile layers plus an **Entities** layer, each with an eye toggle), your **tile set palette** or the **entity palette** under them, a big canvas in the middle and an **Inspector** on the right. Tools: **Brush (B)**, **Rectangle (R)**, **Fill (F)**, **Erase (E)**, **Pick (I)**, **Select (S)**, **Terrain (T)** (auto-tiling); brush options **Flip X (X)**, **Flip Y (Y)** and **Random (V)** (each cell a random tile from the selected block); right-drag erases, middle-drag or Space+drag pans, the wheel zooms. Tiles go straight into the Paper2D tile map (with collision on Ground); entities (player start, patrolling foe, coin, health, checkpoint, exit, moving/one-way platform, hazard, light) are real actors placed on the cell, which you can drag around and edit in the Inspector; the canvas only shows the objects that sit on this map. **New Map** asks for a name, size and optional ground row, makes the map from the selected tile set and places it beside the maps already in the level. **Grow or shrink the map from any side, any time:** drag its border on the canvas (cells to add or remove are previewed), use the Inspector's per-side −/+ buttons, or type an exact size (`Onyx2D.ResizeMap` does it from the console). The map actor moves to make room, so painted tiles, objects, water and zones stay where they are in the level. Everything is undoable. |
 | **Parallax** | **Add Background** places an `AOnyxParallaxBackground`; its layers are edited right in the panel. **Add Layers** turns every texture selected in the Content Browser into a layer (far to near, with sensible factors and depths). |
 | **Level** | **Set Up Level**, **Configure Project** (turns off Lumen, virtual shadow maps, distance fields, motion blur, auto exposure and TAA; makes Onyx Game Mode the default), **Check Level**, Play, Settings, Help. A grid of every Onyx actor: click to place it where the viewport looks, or drag it into the viewport. The **Level Check** lists problems (missing player start, wrong game mode, no lights, actors off the gameplay plane, unlit sprites, exits without a next level...) each with a **Fix** button, plus **Fix All**; double-click selects the actor. |
 
@@ -86,7 +101,10 @@ Everything is C++. The same builders are also exposed to **Editor Utility Bluepr
 (`CreateCharacterFromSheet`, `CreateTileSet`, `CreateTileMap`, `SetupCurrentLevelFor2D`, ...).
 
 Headless builds (no scripting): `UnrealEditor-Cmd.exe YourProject.uproject -run=OnyxExamples` rebuilds missing plugin
-materials and the Sunny Land example; add `-materials` to rebuild only the plugin materials. The materials are created by
+materials and all the examples (Sunny Land, the water test, the Starter Game, the Learn Unreal assets); add `-materials`
+to rebuild only the plugin materials, `-starter` or `-learn` to build only that example. Editor console commands
+(`Onyx2D.Edit`, `Onyx2D.Browse`, `Onyx2D.Select`, `Onyx2D.ShowSettings`, `Onyx2D.ShowTab`, `Onyx2D.Play`, `Onyx2D.Later`,
+`Onyx2D.Capture`...) drive the editor without the mouse, for demos, tests and docs screenshots. The materials are created by
 `FOnyxMaterialBuilder` and re-created automatically when the editor starts if any are missing.
 
 Other editor helpers:
@@ -152,25 +170,54 @@ Physics works like Unity's buoyancy effector, plus what Unity leaves to you:
   carried by the *Current* (with *Current Variation* over time).
 - **Physics Prop** (`AOnyxPhysicsProp`, in the painter's palette and Place Actors): any sprite as a crate, barrel or rock that
   falls, tumbles and floats, with its own *Density* (wood 0.6, stone 2.5). It moves only in the level's plane.
-- **Swimming:** Onyx characters swim when their middle goes under. Jump strokes upward, Down dives, at the surface they bob
-  with the head out and Jump leaves the water. Tune it in *Swim* on the movement component (speed, stroke, sinking, exit jump);
-  the Moveset plays a *Swim* clip if the character has one (else Fall). Events: *On Started Swimming*, *On Stopped Swimming*, *On Swim Stroke*.
+- **Swimming and diving** (*Swim* on the movement component; the Moveset plays a *Swim* clip if there is one, else Fall):
+  - *Diving in:* the water takes part of the fall and the rest carries the swimmer down, so a dive from higher goes deeper;
+    holding Down dives head first, deeper still. Then buoyancy floats it back up (*Entry Speed Kept*, *Dive Drag*, *Dive Time*).
+  - *Steering:* any direction, with Move plus Jump (up) and Down, or the gamepad stick. Speeding up and turning answer at once,
+    letting go drifts a little; faster along the surface with the head out; idle swimmers drift with *Buoyancy*
+    (above 0 floats up, 0 hovers, below 0 sinks).
+  - *Strokes and swim dash:* tap Jump for a stroke towards where you steer (up when not steering); Dash under water is a
+    burst in any direction.
+  - *Getting out:* Jump at the surface jumps out; rising faster than *Breach Speed* through the surface shoots out with
+    *Breach Boost* (a swim dash up from deep is a dolphin leap); swimming into a bank at the surface climbs onto it.
+  - *Breath* (optional, *Limited Breath*): runs out with the head under, refills fast at the surface, then *Drown Damage*
+    every second, so there is time to reach air.
+  - *Bubbles:* a burst and a trail when diving in, with strokes and dashes, and breaths now and then; they wobble up and pop
+    at the surface. `AOnyxWater::EmitBubbles` makes them from Blueprint too.
+  - Events: *On Started / Stopped Swimming*, *On Swim Stroke*, *On Swim Dash*, *On Breached*, *On Climbed Out*,
+    *On Breath Low*, *On Drowning*. AI and cutscenes steer with *Set Vertical Input*.
 - **Waves:** a spring surface that ripples by itself and splashes when anything crosses it, harder the faster it goes,
   with an optional *Splash Effect* (flipbook) and *Splash Sound*.
+- **Effects** (*Wakes*, *Wake Amount*, *Foam Color*, *Silt Color*): a splash sprays droplets, spreads foam on the surface and
+  pushes a ring down through the water; anything moving through the water leaves a wake (bubbles, and soft streaks of
+  churned water when it is fast: dives, strokes, dashes, sinking rocks); swimming along the surface leaves foam and paddle
+  splashes; strokes and swim dashes send a pulse ring; landing on the bottom stirs up sand. All drawn smooth in the
+  particle shader. From Blueprint: *Emit Bubbles*, *Emit Ring*, *Emit Foam*, *Emit Silt*.
 - **Look:** a smooth shader, not pixels: a gradient from *Shallow Color* to *Deep Color*, drifting caustics and light shafts,
   rising bubbles and an anti-aliased surface line, drawn in front of what is in the water and darkened by the lighting mood.
 - In a typed level, `~` is water (a run of `~`, repeated on the rows below for depth). `/Game/Maps/Test_Water` (built with the
   examples after Sunny Land) is a Sunny Land tile map with a pool, crates that float, a rock that sinks and gems to dive for,
-  all placed with the Level Painter, so it opens there ready to edit.
+  all placed with the Level Painter, so it opens there ready to edit. The fox starts high over the pool and dives in.
 
 2D levels (with tile maps, a Level Builder or Onyx Lighting) open in the editor's flat **side view** of the gameplay plane,
 framed on the level (*Project Settings → Onyx2D → Open Levels In Side View*).
 
 ## Interaction
 
-The **Interact** input uses the nearest thing the character touches that implements **Onyx Interactable** (C++ or Blueprint:
-*Interact*, and optionally *Is Interaction Locked* and *Get Interaction Prompt*): levers, doors, signs, chests, NPCs. The Light Switch is one. With nothing to
-use, Player Control's *On Interact* fires instead.
+The **Interact** input uses the nearest thing the character touches that implements **Onyx Interactable** (C++ or Blueprint,
+on an actor or a component: *Interact*, and optionally *Is Interaction Locked* and *Get Interaction Prompt*): levers, doors,
+signs, chests, NPCs. Trigger Zones (*When: Player Presses Interact*), Signs, the Talk behaviour and the Light Switch are ready-made
+ones. The HUD shows the key and the prompt word over the player. With nothing to use, Player Control's *On Interact* fires
+instead; while a conversation is open, Interact and Jump turn its pages.
+
+## Trigger Zones, actions and dialogue
+
+Drag a **Trigger Zone** out in the Level Painter (Objects tab), choose *When* and add *Actions* in the Details panel: the editor
+draws the zone with a summary of what it does. A locked door is a zone with *Needs: Item Key*, a *Move* action on the door and a
+"Locked" message in *Otherwise Actions*. Actions run top to bottom, each after its *Delay*; *Dialogue*, and *Move* with
+*Wait Until Done*, hold the ones below until they finish. The **Level Check** flags zones with no actions, actions that aren't set
+up and items nothing in the level gives. In the game, `Onyx2D.Message <text>` and `Onyx2D.Talk <speaker>: <line> | <line>`
+preview the dialogue UI.
 
 ## Camera
 
@@ -201,8 +248,18 @@ The player camera (`UOnyxCameraComponent`) follows the rules of Unity's Cinemach
 - **Pixel-perfect camera** (Camera > Pixels, on by default): whole screen pixels per art pixel, orthographic, snapped to the screen-pixel grid.
   New characters get Art Pixel Size = their Centimeters Per Pixel (4 by default, the same as tiles).
 - **Sprite pixel snapping** (Onyx characters, animated pickups): sprites are drawn on whole art pixels while movement stays smooth.
-- Tile maps sit just behind the gameplay plane (Y = -20) so sprites never z-fight with background tiles; the Level Check fixes old maps.
+- **Draw order, no z-fighting:** everything 2D sits on the gameplay plane (Y = 0) and `UOnyxDrawOrderSubsystem` gives every sprite
+  its own place: Behind Tiles, Tiles, Props, Items, Characters, Player, In Front, then a slot per actor and the component's
+  Translucency Sort Priority. The sprite materials turn it into a depth bias along the view direction (custom primitive data
+  slot 7), so nothing moves on screen or in the world. Override per actor with a **Draw Order** component.
 - The Onyx camera pins its aspect-ratio axis, so the confiner, framing and 2D light buffer always match what is rendered.
+
+## Example: Starter Game
+
+**Home → Build Starter Game** (or `-run=OnyxExamples -starter`, C++: `FOnyxStarterGame`) builds `/Game/StarterGame/SG_Meadow` and a
+main menu level from the Sunny Land art: a tutorial sign, Mossy the frog (`BP_Mossy`, the frog art with the Friendly NPC preset: Talk, on the player's team), opossums
+and gems, a bouncy-mushroom pit (a launch zone) up to a Key, a checkpoint, a stone gate that a zone lifts when the player has the key,
+and an ending conversation. It can also become the game the project opens with (main menu, first level and default map).
 
 ## Example: Sunny Land
 

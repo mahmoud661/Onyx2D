@@ -28,6 +28,8 @@ namespace
 	/** Lift / drag sample points across a floating object, per side. */
 	constexpr int32 FloatGrid = 3;
 	constexpr int32 MaxDroplets = 400;
+	constexpr int32 MaxBubbles = 300;
+	constexpr int32 MaxEffects = 400;
 }
 
 AOnyxWater::AOnyxWater()
@@ -140,6 +142,185 @@ void AOnyxWater::ThrowDroplets(float WorldX, float Speed, int32 Count)
 	}
 }
 
+void AOnyxWater::EmitBubbles(const FVector& Location, int32 Count, float Spread)
+{
+	const FVector Origin = GetActorLocation();
+	for (int32 Index = 0; Index < Count && Bubbles.Num() < MaxBubbles; ++Index)
+	{
+		const FVector2D Offset = FMath::RandPointInCircle(FMath::Max(Spread, 0.f));
+		const FVector2D Position(Location.X + Offset.X, Location.Z + Offset.Y);
+		if (FMath::Abs(Position.X - Origin.X) > Size.X * 0.5f || Position.Y > GetSurfaceHeightAt(Position.X) || Position.Y < Origin.Z - Size.Y)
+		{
+			continue; // only under the surface, inside the water
+		}
+		FBubble& Bubble = Bubbles.AddDefaulted_GetRef();
+		Bubble.Position = Position;
+		Bubble.Radius = FMath::FRandRange(1.5f, 4.5f);
+		Bubble.RiseSpeed = FMath::FRandRange(70.f, 120.f) + Bubble.Radius * 8.f; // bigger bubbles rise faster
+		Bubble.Phase = FMath::FRandRange(0.f, UE_TWO_PI);
+		Bubble.Life = FMath::FRandRange(3.f, 5.f);
+	}
+}
+
+void AOnyxWater::UpdateBubbles(float DeltaSeconds)
+{
+	const float HalfWidth = Size.X * 0.5f;
+	const float CenterX = GetActorLocation().X;
+	for (int32 Index = Bubbles.Num() - 1; Index >= 0; --Index)
+	{
+		FBubble& Bubble = Bubbles[Index];
+		Bubble.Age += DeltaSeconds;
+		// Speeding up from rest, wobbling side to side, carried by the current.
+		const FVector2D Flow = GetCurrentAt(FVector(Bubble.Position.X, 0.f, Bubble.Position.Y));
+		Bubble.Position.Y += Bubble.RiseSpeed * FMath::Min(Bubble.Age / 0.25f, 1.f) * DeltaSeconds;
+		Bubble.Position.X += (FMath::Sin(Bubble.Age * 7.f + Bubble.Phase) * 20.f + Flow.X * 0.2f) * DeltaSeconds;
+		Bubble.Position.X = FMath::Clamp(Bubble.Position.X, CenterX - HalfWidth, CenterX + HalfWidth);
+		const bool bPopped = Bubble.Position.Y >= GetSurfaceHeightAt(Bubble.Position.X) - Bubble.Radius;
+		if (bPopped)
+		{
+			Splash(Bubble.Position.X, -Bubble.Radius * 0.5f, 8.f); // a tiny ring where it pops
+		}
+		if (bPopped || Bubble.Age >= Bubble.Life)
+		{
+			Bubbles.RemoveAtSwap(Index);
+		}
+	}
+}
+
+// Effects ----------------------------------------------------------------------------------------------------------------
+
+AOnyxWater::FEffect* AOnyxWater::AddEffect(EEffectKind Kind, const FVector2D& Position, float Life, float StartSize, float EndSize, float Alpha)
+{
+	if (Effects.Num() >= MaxEffects)
+	{
+		return nullptr;
+	}
+	FEffect& Effect = Effects.AddDefaulted_GetRef();
+	Effect.Kind = Kind;
+	Effect.Position = Position;
+	Effect.Life = FMath::Max(Life, 0.05f);
+	Effect.StartSize = StartSize;
+	Effect.EndSize = EndSize;
+	Effect.Alpha = Alpha;
+	Effect.Seed = FMath::FRand();
+	return &Effect;
+}
+
+void AOnyxWater::EmitRing(const FVector& Location, float Radius, float Strength)
+{
+	if (Strength > 0.f)
+	{
+		AddEffect(EEffectKind::Ring, FVector2D(Location.X, Location.Z), 0.45f + 0.2f * FMath::Min(Strength, 1.f), Radius * 0.15f, Radius, 0.55f * FMath::Min(Strength, 1.f));
+	}
+}
+
+void AOnyxWater::EmitFoam(float WorldX, float Width, float Strength)
+{
+	// Patches over the width, pushed outwards from the middle, bigger with a stronger splash.
+	const int32 Count = FMath::Clamp(FMath::RoundToInt(3.f + 6.f * Strength), 1, 12);
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		const float Offset = FMath::FRandRange(-0.5f, 0.5f) * FMath::Max(Width, 10.f);
+		const float PatchSize = FMath::FRandRange(8.f, 16.f) * FMath::Clamp(0.6f + Strength * 0.6f, 0.6f, 1.5f);
+		if (FEffect* Foam = AddEffect(EEffectKind::Foam, FVector2D(WorldX + Offset, GetSurfaceHeightAt(WorldX + Offset)), FMath::FRandRange(0.9f, 1.8f), PatchSize, PatchSize * 2.2f, FoamColor.A))
+		{
+			Foam->Velocity = FVector2D(FMath::Sign(Offset + KINDA_SMALL_NUMBER) * FMath::FRandRange(30.f, 110.f) * FMath::Min(Strength, 1.5f), 0.f);
+		}
+	}
+}
+
+void AOnyxWater::EmitSilt(const FVector& Location, float Strength)
+{
+	const int32 Count = FMath::Clamp(FMath::RoundToInt(2.f + 4.f * Strength), 1, 8);
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		const float CloudSize = FMath::FRandRange(10.f, 18.f);
+		if (FEffect* Silt = AddEffect(EEffectKind::Silt, FVector2D(Location.X + FMath::FRandRange(-12.f, 12.f), Location.Z + FMath::FRandRange(0.f, 6.f)),
+			FMath::FRandRange(1.2f, 2.2f), CloudSize, CloudSize * 2.5f, SiltColor.A))
+		{
+			// Rolling out to the sides and up a little.
+			Silt->Velocity = FVector2D(FMath::FRandRange(-1.f, 1.f) * 90.f * Strength, FMath::FRandRange(15.f, 45.f) * Strength);
+		}
+	}
+}
+
+void AOnyxWater::UpdateEffects(float DeltaSeconds)
+{
+	const float HalfWidth = Size.X * 0.5f;
+	const float CenterX = GetActorLocation().X;
+	const float Slowing = FMath::Exp(-2.5f * DeltaSeconds); // the water soon stops everything it carries
+	for (int32 Index = Effects.Num() - 1; Index >= 0; --Index)
+	{
+		FEffect& Effect = Effects[Index];
+		Effect.Age += DeltaSeconds;
+		if (Effect.Age >= Effect.Life)
+		{
+			Effects.RemoveAtSwap(Index);
+			continue;
+		}
+		Effect.Velocity *= Slowing;
+		Effect.Position += Effect.Velocity * DeltaSeconds;
+		Effect.Position.X = FMath::Clamp(Effect.Position.X, CenterX - HalfWidth, CenterX + HalfWidth);
+		if (Effect.Kind == EEffectKind::Foam)
+		{
+			Effect.Position.Y = GetSurfaceHeightAt(Effect.Position.X); // rides the waves
+		}
+	}
+}
+
+void AOnyxWater::LeaveWake(const FBox& Bounds, const FVector& Velocity, float DeltaSeconds)
+{
+	if (!bWakes || WakeAmount <= 0.f)
+	{
+		return;
+	}
+	const FVector2D Motion(Velocity.X, Velocity.Z);
+	const float Speed = Motion.Size();
+	if (Speed < 60.f)
+	{
+		return;
+	}
+	const FVector Center = Bounds.GetCenter();
+	const FVector Extent = Bounds.GetExtent();
+	const float Surface = GetSurfaceHeightAt(Center.X);
+	const FVector2D Ahead = Motion / Speed;
+	const FVector2D Side(-Ahead.Y, Ahead.X);
+	const FVector2D Back(Center.X - Ahead.X * Extent.X, Center.Z - Ahead.Y * Extent.Z);
+	auto Chance = [DeltaSeconds, this](float PerSecond) { return FMath::FRand() < PerSecond * WakeAmount * DeltaSeconds; };
+
+	if (Center.Z < Surface - Extent.Z * 0.5f)
+	{
+		// Under water: bubbles shed from the back, more the faster it goes...
+		if (Speed > 120.f && Chance(Speed / 60.f))
+		{
+			EmitBubbles(FVector(Back.X, 0.f, Back.Y), 1, Extent.X * 0.5f);
+		}
+		// ...and when fast (dives, strokes, dashes), soft streaks of churned water trailing behind, curling to the sides.
+		if (Speed > 260.f && Chance(Speed / 40.f))
+		{
+			const FVector2D Start = Back + Side * FMath::FRandRange(-0.8f, 0.8f) * FMath::Max(Extent.X, Extent.Z);
+			if (FEffect* Streak = AddEffect(EEffectKind::Streak, Start, FMath::FRandRange(0.35f, 0.6f), FMath::FRandRange(5.f, 9.f), 0.f, 0.32f))
+			{
+				Streak->Direction = (Ahead + Side * FMath::FRandRange(-0.35f, 0.35f)).GetSafeNormal();
+				Streak->Length = FMath::Clamp(Speed * 0.12f, 25.f, 130.f);
+				Streak->Velocity = Motion * 0.3f + Side * FMath::FRandRange(-40.f, 40.f);
+			}
+		}
+	}
+	else if (FMath::Abs(Center.Z - Surface) <= Extent.Z && FMath::Abs(Velocity.X) > 90.f)
+	{
+		// Along the surface: foam left behind, and a splash from the paddling now and then.
+		if (Chance(FMath::Abs(Velocity.X) / 45.f))
+		{
+			EmitFoam(Center.X - FMath::Sign(Velocity.X) * Extent.X, Extent.X, 0.3f);
+		}
+		if (Chance(FMath::Abs(Velocity.X) / 160.f))
+		{
+			ThrowDroplets(Center.X - FMath::Sign(Velocity.X) * Extent.X * 0.5f, FMath::Abs(Velocity.X) * 0.9f, FMath::RandRange(1, 3));
+		}
+	}
+}
+
 void AOnyxWater::SimulateWaves(float DeltaSeconds)
 {
 	// Fixed steps keep the springs stable whatever the frame rate: each point springs back to rest, pulls on its
@@ -244,14 +425,15 @@ void AOnyxWater::UpdateMesh()
 		Triangles.Append({ Top, Top + 2, Top + 1, Top + 2, Top + 3, Top + 1 });
 	}
 	WaterMesh->ClearAllMeshSections();
-	WaterMesh->CreateMeshSection_LinearColor(0, Vertices, Triangles, {}, UVs, {}, {}, false);	EnsureMaterials();
+	WaterMesh->CreateMeshSection_LinearColor(0, Vertices, Triangles, {}, UVs, {}, {}, false);
+	EnsureMaterials();
 	WaterMesh->SetMaterial(0, WaterMaterial);
 	BuiltColumns = Count;
 }
 
-void AOnyxWater::UpdateDropletMesh()
+void AOnyxWater::UpdateParticleMesh()
 {
-	if (Droplets.IsEmpty())
+	if (Droplets.IsEmpty() && Bubbles.IsEmpty() && Effects.IsEmpty())
 	{
 		if (WaterMesh->GetNumSections() > 1)
 		{
@@ -259,33 +441,83 @@ void AOnyxWater::UpdateDropletMesh()
 		}
 		return;
 	}
+	const int32 Count = Droplets.Num() + Bubbles.Num() + Effects.Num();
 	TArray<FVector> Vertices;
 	TArray<FVector2D> UVs;
+	TArray<FVector2D> Kinds; // UV1: x = the shape (0 droplet, 1 bubble, then EEffectKind), y = a seed that varies it
 	TArray<FLinearColor> Colors;
 	TArray<int32> Triangles;
-	Vertices.Reserve(Droplets.Num() * 4);
-	UVs.Reserve(Droplets.Num() * 4);
-	Colors.Reserve(Droplets.Num() * 4);
-	Triangles.Reserve(Droplets.Num() * 6);
+	Vertices.Reserve(Count * 4);
+	UVs.Reserve(Count * 4);
+	Kinds.Reserve(Count * 4);
+	Colors.Reserve(Count * 4);
+	Triangles.Reserve(Count * 6);
 	const FVector Origin = GetActorLocation();
-	for (const FDroplet& Drop : Droplets)
+	auto AddQuad = [&](const FVector2D& Position, const FVector2D& Along, const FVector2D& Across, const FLinearColor& Color, float Kind, float Seed = 0.f)
 	{
 		const int32 First = Vertices.Num();
-		const FVector Center(Drop.Position.X - Origin.X, WaterMeshDepth + 1.f, Drop.Position.Y - Origin.Z);
+		const FVector Center(Position.X - Origin.X, WaterMeshDepth + 1.f, Position.Y - Origin.Z);
+		const FVector A(Along.X, 0.f, Along.Y);
+		const FVector B(Across.X, 0.f, Across.Y);
+		Vertices.Append({ Center - A - B, Center - A + B, Center + A - B, Center + A + B });
+		UVs.Append({ FVector2D(0.f, 1.f), FVector2D(1.f, 1.f), FVector2D(0.f, 0.f), FVector2D(1.f, 0.f) });
+		const FVector2D Shape(Kind, Seed);
+		Kinds.Append({ Shape, Shape, Shape, Shape });
+		Colors.Append({ Color, Color, Color, Color });
+		Triangles.Append({ First, First + 2, First + 1, First + 2, First + 3, First + 1 });
+	};
+	for (const FDroplet& Drop : Droplets)
+	{
 		// Stretched a little along its motion, like a real drop.
 		const float Stretch = 1.f + FMath::Min(Drop.Velocity.Size() / 900.f, 0.8f);
 		const FVector2D Direction = Drop.Velocity.GetSafeNormal();
 		const FVector2D Along = (Direction.IsNearlyZero() ? FVector2D(0.f, 1.f) : Direction) * Drop.Radius * Stretch;
-		const FVector2D Across = FVector2D(-Along.Y, Along.X).GetSafeNormal() * Drop.Radius;
-		const FVector A(Along.X, 0.f, Along.Y);
-		const FVector B(Across.X, 0.f, Across.Y);
-		Vertices.Append({ Center - A - B, Center - A + B, Center + A - B, Center + A + B });
-		UVs.Append({ FVector2D(0.f, 0.f), FVector2D(1.f, 0.f), FVector2D(0.f, 1.f), FVector2D(1.f, 1.f) });
-		const FLinearColor Color = SurfaceColor.CopyWithNewOpacity(0.9f * (1.f - Drop.Age / Drop.Life));
-		Colors.Append({ Color, Color, Color, Color });
-		Triangles.Append({ First, First + 2, First + 1, First + 2, First + 3, First + 1 });
+		AddQuad(Drop.Position, Along, FVector2D(-Along.Y, Along.X).GetSafeNormal() * Drop.Radius, SurfaceColor.CopyWithNewOpacity(0.9f * (1.f - Drop.Age / Drop.Life)), 0.f);
 	}
-	WaterMesh->CreateMeshSection_LinearColor(1, Vertices, Triangles, {}, UVs, Colors, {}, false);
+	for (const FBubble& Bubble : Bubbles)
+	{
+		// Upright (the highlight stays at the top left), fading in and out.
+		const float Fade = FMath::Min(Bubble.Age / 0.15f, 1.f) * FMath::Clamp((Bubble.Life - Bubble.Age) / 0.5f, 0.f, 1.f);
+		AddQuad(Bubble.Position, FVector2D(0.f, Bubble.Radius), FVector2D(Bubble.Radius, 0.f), SurfaceColor.CopyWithNewOpacity(0.85f * Fade), 1.f);
+	}
+	for (const FEffect& Effect : Effects)
+	{
+		// Growing quickly at first then easing off, fading over its life.
+		const float T = Effect.Age / Effect.Life;
+		const float Radius = FMath::Lerp(Effect.StartSize, Effect.EndSize, 1.f - FMath::Square(1.f - T));
+		const float FadeIn = FMath::Min(Effect.Age / 0.08f, 1.f);
+		FLinearColor Color = SurfaceColor;
+		FVector2D Along(0.f, Radius);
+		FVector2D Across(Radius, 0.f);
+		float Fade = FadeIn * (1.f - T);
+		switch (Effect.Kind)
+		{
+		case EEffectKind::Ring:
+			Fade = FMath::Pow(1.f - T, 1.5f);
+			break;
+		case EEffectKind::Foam:
+			Color = FoamColor;
+			Along.Y = Radius * 0.45f; // a flat patch lying on the surface
+			Fade = FadeIn * FMath::Clamp((1.f - T) / 0.5f, 0.f, 1.f);
+			break;
+		case EEffectKind::Streak:
+			// Thin and long, pointing the way the water was pushed; it shortens as it fades.
+			Along = Effect.Direction * Effect.Length * 0.5f * FMath::Lerp(1.f, 0.6f, T);
+			Across = FVector2D(-Effect.Direction.Y, Effect.Direction.X) * Effect.StartSize * 0.5f;
+			break;
+		case EEffectKind::Silt:
+			Color = SiltColor;
+			Along.Y = Radius * 0.7f;
+			Fade = FadeIn * FMath::Clamp((1.f - T) / 0.6f, 0.f, 1.f);
+			break;
+		}
+		// Rings stay in the water: their seed is where the surface cuts across them (0 = top of the quad, 1 = bottom).
+		const float Seed = Effect.Kind == EEffectKind::Ring
+			? FMath::Clamp(0.5f - (GetSurfaceHeightAt(Effect.Position.X) - Effect.Position.Y) / (2.f * FMath::Max(Radius, 1.f)), 0.f, 1.f)
+			: Effect.Seed;
+		AddQuad(Effect.Position, Along, Across, Color.CopyWithNewOpacity(Effect.Alpha * Fade), float(uint8(Effect.Kind)), Seed);
+	}
+	WaterMesh->CreateMeshSection_LinearColor(1, Vertices, Triangles, {}, UVs, Kinds, {}, {}, Colors, {}, false);
 	EnsureMaterials();
 	WaterMesh->SetMaterial(1, DropMaterial);
 }
@@ -375,8 +607,10 @@ void AOnyxWater::Tick(float DeltaSeconds)
 		SimulateWaves(DeltaSeconds);
 	}
 	UpdateDroplets(DeltaSeconds);
+	UpdateBubbles(DeltaSeconds);
+	UpdateEffects(DeltaSeconds);
 	UpdateMesh();
-	UpdateDropletMesh();
+	UpdateParticleMesh();
 	UpdateLook();
 }
 
@@ -391,6 +625,15 @@ void AOnyxWater::CrossedSurface(float WorldX, float Speed, float Width, bool bEn
 	const float Power = FMath::Clamp(Speed / 800.f, 0.2f, 1.f);
 	Splash(WorldX, Speed * SplashStrength * (bEntering ? 1.f : -0.5f), FMath::Max(Width, 20.f));
 	ThrowDroplets(WorldX, Speed, FMath::RoundToInt(SplashDroplets * Power));
+	if (bWakes)
+	{
+		// Foam spreading on the surface; going in, a ring pushed through the water under the splash.
+		EmitFoam(WorldX, FMath::Max(Width, 20.f) * 1.5f, Power * (bEntering ? 1.f : 0.6f));
+		if (bEntering)
+		{
+			EmitRing(FVector(WorldX, 0.f, GetSurfaceHeightAt(WorldX) - 25.f), 50.f + 70.f * Power, Power);
+		}
+	}
 	const FVector Location(WorldX, GetActorLocation().Y + WaterMeshDepth + 1.f, GetSurfaceHeightAt(WorldX));
 	if (SplashEffect)
 	{
@@ -510,6 +753,7 @@ void AOnyxWater::AffectOverlaps(float DeltaSeconds)
 		{
 			continue;
 		}
+		LeaveWake(Box, Velocity, DeltaSeconds);
 
 		// Splash when the centre crosses the surface.
 		if (const float* Last = LastCenters.Find(Primitive))

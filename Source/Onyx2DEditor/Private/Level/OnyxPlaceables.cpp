@@ -17,6 +17,8 @@
 #include "World/OnyxPickup.h"
 #include "World/OnyxWater.h"
 #include "World/OnyxLightSwitch.h"
+#include "World/OnyxSign.h"
+#include "Logic/OnyxTriggerZone.h"
 #include "Audio/OnyxLevelAudio.h"
 
 const TArray<FOnyxPlaceable>& GetOnyxPlaceables()
@@ -35,6 +37,8 @@ const TArray<FOnyxPlaceable>& GetOnyxPlaceables()
 		{ AOnyxLightingEnvironment::StaticClass(), INVTEXT("Onyx Lighting"), INVTEXT("The level's look: sun, ambient, depth fog, bloom, colour grade. Presets: Day, Dusk, Night, Cave, Dungeon.") },
 		{ AOnyxLight2D::StaticClass(), INVTEXT("2D Light"), INVTEXT("Torch, candle, lantern, magic, crystal, lava or window light with a glow halo; flickers or pulses; optional crackle / hum sound.") },
 		{ AOnyxLightSwitch::StaticClass(), INVTEXT("Light Switch"), INVTEXT("Lever or pressure plate that turns lights on / off with a fade (Interact input, or walking over it).") },
+		{ AOnyxTriggerZone::StaticClass(), INVTEXT("Trigger Zone"), INVTEXT("Invisible box that makes things happen with no Blueprint: pick When (the player enters, presses Interact...) and list Actions (message, open a door, give a key, teleport...).") },
+		{ AOnyxSign::StaticClass(), INVTEXT("Sign"), INVTEXT("A sign the player reads with Interact: its pages show in the dialogue box.") },
 		{ AOnyxLevelAudio::StaticClass(), INVTEXT("Level Audio"), INVTEXT("The level's music and ambience loop; Camera Zones can override them.") },
 		{ AOnyxCameraBounds::StaticClass(), INVTEXT("Camera Zone"), INVTEXT("Confines the camera and/or switches its profile inside an area.") },
 		{ AOnyxParallaxBackground::StaticClass(), INVTEXT("Parallax Background"), INVTEXT("Layers of tiling textures that scroll with the camera.") },

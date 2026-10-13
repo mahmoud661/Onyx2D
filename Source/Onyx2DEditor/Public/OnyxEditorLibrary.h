@@ -16,7 +16,7 @@ class UTexture2D;
 
 /** The Onyx2D editor tools as functions, for Editor Utility Blueprints and Python scripts. */
 UCLASS()
-class UOnyxEditorLibrary : public UBlueprintFunctionLibrary
+class ONYX2DEDITOR_API UOnyxEditorLibrary : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
 

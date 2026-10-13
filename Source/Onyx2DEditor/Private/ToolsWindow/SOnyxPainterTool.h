@@ -87,6 +87,10 @@ private:
 	/** The block of cells the dragged area object should cover, with the mouse over Cell. */
 	FIntRect GetDraggedArea(const FIntPoint& Cell) const;
 	TOptional<EMouseCursor::Type> GetCursorFor(FVector2D MapPixels) const;
+	/** Grows or shrinks the map from its edges (canvas border drag, Inspector buttons); warns about objects left outside. */
+	void ResizeMapEdges(const FOnyxMapEdges& Edges);
+	/** [-] Side [+]: removes or adds EdgeStep cells on one side of the map. */
+	TSharedRef<SWidget> MakeEdgeButtons(const FText& Side, const FText& Where, int32 FOnyxMapEdges::* Edge, bool bColumns);
 	FReply HandleKey(const FKeyEvent& Event);
 	void AddSelectedAssetsAsBrushes();
 	void CreateNewMap();
@@ -129,6 +133,10 @@ private:
 	FIntPoint GrabStartCell = FIntPoint::ZeroValue;
 	bool bWarnedNoActor = false;
 	FIntPoint NewSize = FIntPoint(60, 24);
+	/** The map size NewSize last followed: when the map changes size (here, in an undo, in another editor), the fields follow it. */
+	FIntPoint MapSizeSeen = FIntPoint::ZeroValue;
+	/** Cells the Inspector's edge buttons add or remove. */
+	int32 EdgeStep = 4;
 
 	/** Tile layer index, or -1 Entities / -2 Decor. */
 	TArray<TSharedPtr<int32>> LayerItems;

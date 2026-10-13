@@ -38,9 +38,12 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Control")
 	FOnyxInteractSignature OnInteract;
 
-	/** The nearest interactable (lever, door, NPC...) the character touches that can be used now, or null. */
+	/**
+	 * The nearest thing the character touches that Interact would use now (a lever, a sign, a door, an NPC's Talk
+	 * component), or null. It is an actor or a component that implements Onyx Interactable.
+	 */
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Control")
-	AActor* FindInteractable() const;
+	UObject* FindInteractable() const;
 
 protected:
 	virtual void BeginPlay() override;
@@ -53,10 +56,13 @@ private:
 	void BindTo(AController* Controller);
 	void Unbind();
 	bool CanAct() const;
+	/** While a conversation is open, Jump and Interact turn its pages. True if one was open. */
+	bool AdvanceDialogue() const;
 	void ReleaseHeldInput();
 
 	void HandleMove(const FInputActionValue& Value);
 	void HandleMoveReleased(const FInputActionValue& Value);
+	void HandleVertical(const FInputActionValue& Value);
 	void HandleJumpPressed(const FInputActionValue& Value);
 	void HandleJumpReleased(const FInputActionValue& Value);
 	void HandleDash(const FInputActionValue& Value);

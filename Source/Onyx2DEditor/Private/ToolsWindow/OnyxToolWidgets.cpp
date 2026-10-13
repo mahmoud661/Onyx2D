@@ -2,6 +2,10 @@
 
 #include "ToolsWindow/OnyxToolWidgets.h"
 #include "Framework/Notifications/NotificationManager.h"
+#include "Core/Onyx2DSettings.h"
+#include "HAL/PlatformProcess.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Input/SButton.h"
 #include "DetailLayoutBuilder.h"
 #include "IDetailCustomization.h"
 #include "IDetailsView.h"
@@ -160,4 +164,29 @@ namespace OnyxTools
 			Item->SetCompletionState(bSuccess ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail);
 		}
 	}
+}
+
+void OnyxTools::OpenDocs(const FString& Page)
+{
+	FString Url = GetDefault<UOnyx2DSettings>()->DocsUrl;
+	Url.RemoveFromEnd(TEXT("/"));
+	if (!Page.IsEmpty())
+	{
+		Url += TEXT("/") + Page;
+	}
+	FPlatformProcess::LaunchURL(*Url, nullptr, nullptr);
+}
+
+TSharedRef<SWidget> OnyxTools::HelpButton(const FString& Page, const FText& Tooltip)
+{
+	return SNew(SButton)
+		.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+		.ContentPadding(FMargin(2.f))
+		.ToolTipText(Tooltip.IsEmpty() ? INVTEXT("Open the documentation for this") : Tooltip)
+		.OnClicked_Lambda([Page]() { OpenDocs(Page); return FReply::Handled(); })
+		[
+			SNew(SImage)
+			.Image(FAppStyle::GetBrush("Icons.Help"))
+			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+		];
 }

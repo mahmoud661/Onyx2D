@@ -4,6 +4,10 @@
 #include "Level/OnyxBrushLibrary.h"
 #include "Level/OnyxMapPainter.h"
 #include "Engine/Texture2D.h"
+#include "Fonts/FontMeasure.h"
+#include "Framework/Application/SlateApplication.h"
+#include "PaperTileMap.h"
+#include "Rendering/SlateRenderer.h"
 #include "PaperTileSet.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/AppStyle.h"
@@ -30,6 +34,49 @@ namespace
 		const TArray<FVector2f> Points = { Min, Min + FVector2f(Size.X, 0.f), Min + Size, Min + FVector2f(0.f, Size.Y), Min };
 		FSlateDrawElement::MakeLines(Out, LayerId, Geometry.ToPaintGeometry(), Points, ESlateDrawEffect::None, Color, true, Thickness);
 	}
+
+	/** Edges of the map's border, grabbed to grow or shrink it. */
+	enum EOnyxMapEdge : int32
+	{
+		MapEdgeLeft = 1,
+		MapEdgeRight = 2,
+		MapEdgeTop = 4,
+		MapEdgeBottom = 8,
+	};
+	/** How far outside the border (screen pixels) the mouse grabs it. */
+	constexpr float MapEdgeReach = 12.f;
+	const FLinearColor MapEdgeRemoveColor(0.95f, 0.22f, 0.2f, 0.32f);
+
+	EMouseCursor::Type MapEdgeCursor(int32 Edges)
+	{
+		const bool bHorizontal = (Edges & (MapEdgeLeft | MapEdgeRight)) != 0;
+		const bool bVertical = (Edges & (MapEdgeTop | MapEdgeBottom)) != 0;
+		if (bHorizontal && bVertical)
+		{
+			const bool bFalling = ((Edges & MapEdgeLeft) != 0) == ((Edges & MapEdgeTop) != 0); // top-left or bottom-right corner
+			return bFalling ? EMouseCursor::ResizeSouthEast : EMouseCursor::ResizeSouthWest;
+		}
+		return bHorizontal ? EMouseCursor::ResizeLeftRight : EMouseCursor::ResizeUpDown;
+	}
+
+	/** A short label in a dark box near Position, kept inside the canvas. */
+	void DrawCanvasLabel(FSlateWindowElementList& Out, int32 LayerId, const FGeometry& Geometry, const FString& Text, FVector2f Position)
+	{
+		if (!FSlateApplication::IsInitialized())
+		{
+			return;
+		}
+		const FSlateFontInfo LabelFont = FCoreStyle::GetDefaultFontStyle("Bold", 9);
+		const FVector2f TextSize(FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(Text, LabelFont));
+		const FVector2f Padding(8.f, 4.f);
+		const FVector2f BoxSize = TextSize + Padding * 2.f;
+		const FVector2f Area(Geometry.GetLocalSize());
+		Position.X = FMath::Clamp(Position.X, 4.f, FMath::Max(Area.X - BoxSize.X - 4.f, 4.f));
+		Position.Y = FMath::Clamp(Position.Y, 4.f, FMath::Max(Area.Y - BoxSize.Y - 4.f, 4.f));
+		DrawRect(Out, LayerId, Geometry, Position, BoxSize, FLinearColor(0.015f, 0.018f, 0.025f, 0.94f));
+		FSlateDrawElement::MakeText(Out, LayerId + 1, Geometry.ToPaintGeometry(TextSize, FSlateLayoutTransform(Position + Padding)), Text, LabelFont,
+			ESlateDrawEffect::None, FLinearColor::White);
+	}
 }
 
 void SOnyxMapCanvas::Construct(const FArguments& InArgs)
@@ -46,6 +93,7 @@ void SOnyxMapCanvas::Construct(const FArguments& InArgs)
 	OnStroke = InArgs._OnStroke;
 	OnKey = InArgs._OnKey;
 	OnQueryCursor = InArgs._OnQueryCursor;
+	OnResizeMap = InArgs._OnResizeMap;
 	TileBrush.DrawAs = ESlateBrushDrawType::Image;
 	SpriteBrush.DrawAs = ESlateBrushDrawType::Image;
 	SetClipping(EWidgetClipping::ClipToBounds);
@@ -183,10 +231,6 @@ void SOnyxMapCanvas::DrawArea(FSlateWindowElementList& OutDrawElements, int32 La
 		return Color;
 	};
 
-	// Body: light under the top edge, deep at the bottom.
-	FSlateDrawElement::MakeGradient(OutDrawElements, LayerId, Geometry.ToPaintGeometry(Size, FSlateLayoutTransform(Min)),
-		{ FSlateGradientStop(FVector2f::ZeroVector, Fade(Look.Top, 0.45f)), FSlateGradientStop(FVector2f(0.f, Size.Y), Fade(Look.Bottom, 0.7f)) }, Orient_Horizontal);
-
 	// Top edge: rippling slowly for water (in map space, so panning doesn't move the waves).
 	const int32 Steps = FMath::Clamp(FMath::CeilToInt(Size.X / 5.f), 1, 600);
 	const float Time = float(FMath::Fmod(FPlatformTime::Seconds(), 1000.0));
@@ -201,6 +245,33 @@ void SOnyxMapCanvas::DrawArea(FSlateWindowElementList& OutDrawElements, int32 La
 		Edge.Add(FVector2f(X, Min.Y + Wave));
 	}
 	FSlateDrawElement::MakeLines(OutDrawElements, LayerId + 1, Geometry.ToPaintGeometry(), Edge, ESlateDrawEffect::None, Fade(Look.Edge, 0.9f), true, FMath::Clamp(Zoom * 0.75f, 1.5f, 3.f));
+
+	// Body: light under the top edge, deep at the bottom. Its top follows the edge, so the ripples and the fill line up.
+	const FLinearColor TopColor = Fade(Look.Top, 0.45f);
+	const FLinearColor BottomColor = Fade(Look.Bottom, 0.7f);
+	const FSlateRenderTransform& Transform = Geometry.GetAccumulatedRenderTransform();
+	TArray<FSlateVertex> Vertices;
+	TArray<SlateIndex> Indexes;
+	Vertices.Reserve(Edge.Num() * 2);
+	Indexes.Reserve(Edge.Num() * 6);
+	for (int32 Index = 0; Index < Edge.Num(); ++Index)
+	{
+		const FVector2f& Top = Edge[Index];
+		const FLinearColor AtTop = FMath::Lerp(TopColor, BottomColor, FMath::Clamp((Top.Y - Min.Y) / Size.Y, 0.f, 1.f));
+		// Slate packs vertex colours as sRGB.
+		Vertices.Add(FSlateVertex::Make(Transform, Top, FVector2f(0.5f), AtTop.ToFColor(true)));
+		Vertices.Add(FSlateVertex::Make(Transform, FVector2f(Top.X, Max.Y), FVector2f(0.5f), BottomColor.ToFColor(true)));
+		if (Index > 0)
+		{
+			const SlateIndex Base = SlateIndex((Index - 1) * 2);
+			Indexes.Append({ Base, SlateIndex(Base + 1), SlateIndex(Base + 2), SlateIndex(Base + 2), SlateIndex(Base + 1), SlateIndex(Base + 3) });
+		}
+	}
+	if (Indexes.Num() > 0 && FSlateApplication::IsInitialized())
+	{
+		const FSlateResourceHandle White = FSlateApplication::Get().GetRenderer()->GetResourceHandle(*FCoreStyle::Get().GetBrush("GenericWhiteBox"));
+		FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, White, Vertices, Indexes, nullptr, 0, 0);
+	}
 
 	// Name and size in cells, when there is room.
 	const FIntPoint Tile = Painter->GetTileSize();
@@ -272,6 +343,7 @@ int32 SOnyxMapCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 	{
 		return LayerId + 1;
 	}
+	FollowMapCorner();
 	if (bFitRequested)
 	{
 		FitTo(Area);
@@ -457,7 +529,160 @@ int32 SOnyxMapCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 		}
 		DrawOutline(OutDrawElements, DrawLayer + 3, AllottedGeometry, Min, OutlineSize, FLinearColor(1.f, 1.f, 1.f, 0.85f), 1.5f);
 	}
-	return DrawLayer + 3;
+	DrawMapEdges(OutDrawElements, DrawLayer + 4, AllottedGeometry, MapMin, MapMin + MapPixels, CellSize);
+	return DrawLayer + 7;
+}
+
+void SOnyxMapCanvas::FollowMapCorner() const
+{
+	UPaperTileMap* Map = Painter->GetTileMap();
+	const TOptional<FVector> Corner = Painter->GetMapCornerInLevel();
+	if (Map == CornerMap.Get() && Corner.IsSet() && CornerInLevel.IsSet() && !Corner->Equals(*CornerInLevel, 0.01))
+	{
+		// Where the old corner is on the map now: move the view by as much, so nothing on screen jumps.
+		Pan -= Painter->WorldToMapPixels(*CornerInLevel) * Zoom;
+	}
+	CornerMap = Map;
+	CornerInLevel = Corner;
+}
+
+int32 SOnyxMapCanvas::GetMapEdgesAt(const FVector2D& Local) const
+{
+	const FIntPoint Size = Painter ? Painter->GetMapSize() : FIntPoint::ZeroValue;
+	if (!OnResizeMap.IsBound() || Size.X <= 0 || Size.Y <= 0)
+	{
+		return 0;
+	}
+	const FVector2f Min = CellToLocal(FIntPoint::ZeroValue);
+	const FVector2f Max = CellToLocal(Size);
+	if (Local.X < Min.X - MapEdgeReach || Local.X > Max.X + MapEdgeReach || Local.Y < Min.Y - MapEdgeReach || Local.Y > Max.Y + MapEdgeReach)
+	{
+		return 0;
+	}
+	int32 Edges = 0;
+	Edges |= Local.X < Min.X ? MapEdgeLeft : (Local.X > Max.X ? MapEdgeRight : 0);
+	Edges |= Local.Y < Min.Y ? MapEdgeTop : (Local.Y > Max.Y ? MapEdgeBottom : 0);
+	return Edges;
+}
+
+FOnyxMapEdges SOnyxMapCanvas::GetDraggedEdges(const FVector2D& Local) const
+{
+	const FIntPoint Size = Painter->GetMapSize();
+	const FIntPoint Tile = Painter->GetTileSize();
+	const FVector2D Moved = (Local - MapGrabLocal) / FMath::Max(Zoom, 0.01f);
+	const int32 Columns = FMath::RoundToInt(Moved.X / FMath::Max(Tile.X, 1));
+	const int32 Rows = FMath::RoundToInt(Moved.Y / FMath::Max(Tile.Y, 1));
+	// Out adds cells, in removes them; at least one cell stays.
+	const int32 MaxSize = FOnyxMapPainter::MaxMapSize;
+	FOnyxMapEdges Edges;
+	Edges.Left = (GrabbedMapEdges & MapEdgeLeft) != 0 ? FMath::Clamp(-Columns, 1 - Size.X, MaxSize - Size.X) : 0;
+	Edges.Right = (GrabbedMapEdges & MapEdgeRight) != 0 ? FMath::Clamp(Columns, 1 - Size.X, MaxSize - Size.X) : 0;
+	Edges.Top = (GrabbedMapEdges & MapEdgeTop) != 0 ? FMath::Clamp(-Rows, 1 - Size.Y, MaxSize - Size.Y) : 0;
+	Edges.Bottom = (GrabbedMapEdges & MapEdgeBottom) != 0 ? FMath::Clamp(Rows, 1 - Size.Y, MaxSize - Size.Y) : 0;
+	return Edges;
+}
+
+void SOnyxMapCanvas::DrawMapEdges(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, const FVector2f& MapMin,
+	const FVector2f& MapMax, const FVector2f& CellSize) const
+{
+	if (!OnResizeMap.IsBound())
+	{
+		return;
+	}
+	const FLinearColor Accent = OnyxTools::Accent();
+	const int32 Lit = GrabbedMapEdges != 0 ? GrabbedMapEdges : (bHasHover && !bStroking && !bPanning ? GetMapEdgesAt(HoverLocal) : 0);
+
+	// A grip in the middle of each side, just outside the border; the side under the mouse lights up.
+	const FVector2f Center = (MapMin + MapMax) * 0.5f;
+	const float Grip = FMath::Clamp(FMath::Min(MapMax.X - MapMin.X, MapMax.Y - MapMin.Y) * 0.3f, 14.f, 44.f);
+	struct FGrip
+	{
+		int32 Edge;
+		FVector2f Min;
+		FVector2f Size;
+		FVector2f From;
+		FVector2f To;
+	};
+	const FGrip Grips[] = {
+		{ MapEdgeLeft, FVector2f(MapMin.X - 8.f, Center.Y - Grip * 0.5f), FVector2f(4.f, Grip), MapMin, FVector2f(MapMin.X, MapMax.Y) },
+		{ MapEdgeRight, FVector2f(MapMax.X + 4.f, Center.Y - Grip * 0.5f), FVector2f(4.f, Grip), FVector2f(MapMax.X, MapMin.Y), MapMax },
+		{ MapEdgeTop, FVector2f(Center.X - Grip * 0.5f, MapMin.Y - 8.f), FVector2f(Grip, 4.f), MapMin, FVector2f(MapMax.X, MapMin.Y) },
+		{ MapEdgeBottom, FVector2f(Center.X - Grip * 0.5f, MapMax.Y + 4.f), FVector2f(Grip, 4.f), FVector2f(MapMin.X, MapMax.Y), MapMax },
+	};
+	for (const FGrip& Each : Grips)
+	{
+		const bool bLit = (Lit & Each.Edge) != 0;
+		DrawRect(OutDrawElements, LayerId, Geometry, Each.Min, Each.Size, bLit ? Accent : FLinearColor(1.f, 1.f, 1.f, 0.28f));
+		if (bLit && GrabbedMapEdges == 0)
+		{
+			FSlateDrawElement::MakeLines(OutDrawElements, LayerId, Geometry.ToPaintGeometry(), TArray<FVector2f>{ Each.From, Each.To }, ESlateDrawEffect::None, Accent, true, 2.f);
+		}
+	}
+	if (GrabbedMapEdges == 0)
+	{
+		if (Lit != 0)
+		{
+			DrawCanvasLabel(OutDrawElements, LayerId + 2, Geometry, TEXT("Drag out to add cells, in to remove them"), FVector2f(HoverLocal) + FVector2f(16.f, 18.f));
+		}
+		return;
+	}
+
+	// Dragging: cells to add (accent, with their grid) and cells to remove (red), then the new border.
+	const FOnyxMapEdges& Edges = DraggedEdges;
+	const FVector2f NewMin = MapMin - FVector2f(Edges.Left * CellSize.X, Edges.Top * CellSize.Y);
+	const FVector2f NewMax = MapMax + FVector2f(Edges.Right * CellSize.X, Edges.Bottom * CellSize.Y);
+	const FLinearColor GridColor(1.f, 1.f, 1.f, 0.08f);
+	auto Strip = [&](float X0, float Y0, float X1, float Y1, bool bAdd)
+	{
+		if (X1 - X0 < 0.5f || Y1 - Y0 < 0.5f)
+		{
+			return;
+		}
+		DrawRect(OutDrawElements, LayerId, Geometry, FVector2f(X0, Y0), FVector2f(X1 - X0, Y1 - Y0), bAdd ? Accent.CopyWithNewOpacity(0.16f) : MapEdgeRemoveColor);
+		if (!bAdd || CellSize.X < 6.f || CellSize.Y < 6.f)
+		{
+			return;
+		}
+		TArray<FVector2f> Line;
+		Line.SetNum(2);
+		for (float X = X0 + CellSize.X; X < X1 - 0.5f; X += CellSize.X)
+		{
+			Line[0] = FVector2f(X, Y0);
+			Line[1] = FVector2f(X, Y1);
+			FSlateDrawElement::MakeLines(OutDrawElements, LayerId + 1, Geometry.ToPaintGeometry(), Line, ESlateDrawEffect::None, GridColor, false, 1.f);
+		}
+		for (float Y = Y0 + CellSize.Y; Y < Y1 - 0.5f; Y += CellSize.Y)
+		{
+			Line[0] = FVector2f(X0, Y);
+			Line[1] = FVector2f(X1, Y);
+			FSlateDrawElement::MakeLines(OutDrawElements, LayerId + 1, Geometry.ToPaintGeometry(), Line, ESlateDrawEffect::None, GridColor, false, 1.f);
+		}
+	};
+	// Top and bottom strips span the whole width; the side strips only the rows in between, so corners aren't drawn twice.
+	const float SideTop = FMath::Max(NewMin.Y, MapMin.Y);
+	const float SideBottom = FMath::Min(NewMax.Y, MapMax.Y);
+	Edges.Top > 0 ? Strip(NewMin.X, NewMin.Y, NewMax.X, MapMin.Y, true) : Strip(MapMin.X, MapMin.Y, MapMax.X, NewMin.Y, false);
+	Edges.Bottom > 0 ? Strip(NewMin.X, MapMax.Y, NewMax.X, NewMax.Y, true) : Strip(MapMin.X, NewMax.Y, MapMax.X, MapMax.Y, false);
+	Edges.Left > 0 ? Strip(NewMin.X, SideTop, MapMin.X, SideBottom, true) : Strip(MapMin.X, SideTop, NewMin.X, SideBottom, false);
+	Edges.Right > 0 ? Strip(MapMax.X, SideTop, NewMax.X, SideBottom, true) : Strip(NewMax.X, SideTop, MapMax.X, SideBottom, false);
+	DrawOutline(OutDrawElements, LayerId + 1, Geometry, NewMin, NewMax - NewMin, Accent, 2.f);
+
+	TArray<FString> Changes;
+	auto Describe = [&Changes](int32 Count, const TCHAR* Unit, const TCHAR* Where)
+	{
+		if (Count != 0)
+		{
+			Changes.Add(FString::Printf(TEXT("%s%d %s%s %s"), Count > 0 ? TEXT("+") : TEXT("-"), FMath::Abs(Count), Unit, FMath::Abs(Count) == 1 ? TEXT("") : TEXT("s"), Where));
+		}
+	};
+	Describe(Edges.Left, TEXT("column"), TEXT("on the left"));
+	Describe(Edges.Right, TEXT("column"), TEXT("on the right"));
+	Describe(Edges.Top, TEXT("row"), TEXT("at the top"));
+	Describe(Edges.Bottom, TEXT("row"), TEXT("at the bottom"));
+	const FIntPoint NewSize = Edges.Apply(Painter->GetMapSize());
+	const FString Label = Changes.IsEmpty() ? FString::Printf(TEXT("%d x %d  (drag out to add, in to remove)"), NewSize.X, NewSize.Y)
+		: FString::Printf(TEXT("%s  =  %d x %d"), *FString::Join(Changes, TEXT(", ")), NewSize.X, NewSize.Y);
+	DrawCanvasLabel(OutDrawElements, LayerId + 2, Geometry, Label, FVector2f(HoverLocal) + FVector2f(16.f, 18.f));
 }
 
 FReply SOnyxMapCanvas::OnMouseButtonDown(const FGeometry& Geometry, const FPointerEvent& Event)
@@ -467,6 +692,21 @@ FReply SOnyxMapCanvas::OnMouseButtonDown(const FGeometry& Geometry, const FPoint
 	{
 		bPanning = true;
 		return FReply::Handled().CaptureMouse(SharedThis(this)).SetUserFocus(SharedThis(this));
+	}
+	if (Button == EKeys::LeftMouseButton && Painter && Painter->GetMapSize().X > 0)
+	{
+		const FVector2D Local = Geometry.AbsoluteToLocal(Event.GetScreenSpacePosition());
+		// A tool showing its own cursor here (the handles of the selected water) keeps the click.
+		const bool bToolWantsIt = OnQueryCursor.IsBound() && OnQueryCursor.Execute((Local - Pan) / FMath::Max(Zoom, 0.01f)).IsSet();
+		if (const int32 Edges = bToolWantsIt ? 0 : GetMapEdgesAt(Local))
+		{
+			GrabbedMapEdges = Edges;
+			MapGrabLocal = Local;
+			DraggedEdges = FOnyxMapEdges();
+			HoverLocal = Local;
+			HoverCell = LocalToCell(Local);
+			return FReply::Handled().CaptureMouse(SharedThis(this)).SetUserFocus(SharedThis(this));
+		}
 	}
 	if ((Button == EKeys::LeftMouseButton || Button == EKeys::RightMouseButton) && Painter && Painter->GetMapSize().X > 0)
 	{
@@ -482,6 +722,17 @@ FReply SOnyxMapCanvas::OnMouseButtonDown(const FGeometry& Geometry, const FPoint
 
 FReply SOnyxMapCanvas::OnMouseButtonUp(const FGeometry& Geometry, const FPointerEvent& Event)
 {
+	if (GrabbedMapEdges != 0)
+	{
+		const FOnyxMapEdges Edges = DraggedEdges;
+		GrabbedMapEdges = 0;
+		DraggedEdges = FOnyxMapEdges();
+		if (!Edges.IsZero())
+		{
+			OnResizeMap.ExecuteIfBound(Edges);
+		}
+		return FReply::Handled().ReleaseMouseCapture();
+	}
 	if (bPanning)
 	{
 		bPanning = false;
@@ -508,8 +759,13 @@ FReply SOnyxMapCanvas::OnMouseMove(const FGeometry& Geometry, const FPointerEven
 		return FReply::Unhandled();
 	}
 	HoverLocal = Geometry.AbsoluteToLocal(Event.GetScreenSpacePosition());
-	const FIntPoint Cell = LocalToCell(HoverLocal);
 	bHasHover = true;
+	if (GrabbedMapEdges != 0)
+	{
+		DraggedEdges = GetDraggedEdges(HoverLocal);
+		return FReply::Handled();
+	}
+	const FIntPoint Cell = LocalToCell(HoverLocal);
 	if (Cell != HoverCell)
 	{
 		HoverCell = Cell;
@@ -534,14 +790,27 @@ FReply SOnyxMapCanvas::OnMouseWheel(const FGeometry& Geometry, const FPointerEve
 void SOnyxMapCanvas::OnMouseLeave(const FPointerEvent& Event)
 {
 	SLeafWidget::OnMouseLeave(Event);
-	if (!bStroking)
+	if (!bStroking && GrabbedMapEdges == 0)
 	{
 		bHasHover = false;
 	}
 }
 
+void SOnyxMapCanvas::OnMouseCaptureLost(const FCaptureLostEvent& CaptureLostEvent)
+{
+	SLeafWidget::OnMouseCaptureLost(CaptureLostEvent);
+	GrabbedMapEdges = 0; // a border drag that loses the mouse changes nothing
+	DraggedEdges = FOnyxMapEdges();
+}
+
 FReply SOnyxMapCanvas::OnKeyDown(const FGeometry& Geometry, const FKeyEvent& Event)
 {
+	if (GrabbedMapEdges != 0 && Event.GetKey() == EKeys::Escape)
+	{
+		GrabbedMapEdges = 0; // cancel the border drag
+		DraggedEdges = FOnyxMapEdges();
+		return FReply::Handled().ReleaseMouseCapture();
+	}
 	if (Event.GetKey() == EKeys::SpaceBar)
 	{
 		bSpaceHeld = true;
@@ -566,6 +835,10 @@ FCursorReply SOnyxMapCanvas::OnCursorQuery(const FGeometry& Geometry, const FPoi
 	{
 		return FCursorReply::Cursor(EMouseCursor::GrabHandClosed);
 	}
+	if (GrabbedMapEdges != 0)
+	{
+		return FCursorReply::Cursor(MapEdgeCursor(GrabbedMapEdges));
+	}
 	if (bSpaceHeld)
 	{
 		return FCursorReply::Cursor(EMouseCursor::GrabHand);
@@ -576,6 +849,10 @@ FCursorReply SOnyxMapCanvas::OnCursorQuery(const FGeometry& Geometry, const FPoi
 		{
 			return FCursorReply::Cursor(*Cursor);
 		}
+	}
+	if (const int32 Edges = bHasHover && !bStroking ? GetMapEdgesAt(HoverLocal) : 0)
+	{
+		return FCursorReply::Cursor(MapEdgeCursor(Edges));
 	}
 	return FCursorReply::Cursor(EMouseCursor::Crosshairs);
 }

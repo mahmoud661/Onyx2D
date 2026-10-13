@@ -110,30 +110,67 @@ void UOnyxMainMenu::BuildUI()
 	MainMenuFill(Root->AddChildToOverlay(FadeOverlay));
 }
 
+void UOnyxMainMenu::NativeConstruct()
+{
+	Super::NativeConstruct();
+	// The fade covers the whole screen: it must never take the clicks meant for the buttons under it.
+	if (FadeOverlay)
+	{
+		FadeOverlay->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+}
+
+void UOnyxMainMenu::OnBackPressed()
+{
+	if (DialogLayer)
+	{
+		RequestQuit();
+	}
+}
+
 void UOnyxMainMenu::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	const FOnyxUITheme& Style = Theme();
 
-	const float TitleIn = SmoothStep01((Age - 0.05f) / 0.9f);
-	Title->SetRenderOpacity(TitleIn);
-	Title->SetRenderTranslation(FVector2D(0.f, (1.f - TitleIn) * 22.f));
-	Title->SetShadowColorAndOpacity(WithAlpha(Style.Accent, 0.16f + 0.12f * FMath::Sin(Age * 1.3f)));
-
-	const float SubIn = SmoothStep01((Age - 0.2f) / 0.7f);
-	Subtitle->SetRenderOpacity(SubIn);
-	Subtitle->SetRenderTranslation(FVector2D(0.f, (1.f - SubIn) * -10.f));
-	Divider->SetRenderScale(FVector2D(FMath::Max(SmoothStep01((Age - 0.35f) / 0.8f), 0.001f), 1.f));
-	Footer->SetRenderOpacity(SmoothStep01((Age - 0.9f) / 0.6f));
+	// Each part is optional: a layout of its own may leave any of them out.
+	if (Title)
+	{
+		const float TitleIn = SmoothStep01((Age - 0.05f) / 0.9f);
+		Title->SetRenderOpacity(TitleIn);
+		Title->SetRenderTranslation(FVector2D(0.f, (1.f - TitleIn) * 22.f));
+		Title->SetShadowColorAndOpacity(WithAlpha(Style.Accent, 0.16f + 0.12f * FMath::Sin(Age * 1.3f)));
+	}
+	if (Subtitle)
+	{
+		const float SubIn = SmoothStep01((Age - 0.2f) / 0.7f);
+		Subtitle->SetRenderOpacity(SubIn);
+		Subtitle->SetRenderTranslation(FVector2D(0.f, (1.f - SubIn) * -10.f));
+	}
+	if (Divider)
+	{
+		Divider->SetRenderScale(FVector2D(FMath::Max(SmoothStep01((Age - 0.35f) / 0.8f), 0.001f), 1.f));
+	}
+	if (Footer)
+	{
+		Footer->SetRenderOpacity(SmoothStep01((Age - 0.9f) / 0.6f));
+	}
 
 	if (LeaveTime < 0.f)
 	{
-		FadeOverlay->SetRenderOpacity(1.f - SmoothStep01(Age / 0.8f));
+		if (FadeOverlay)
+		{
+			FadeOverlay->SetRenderOpacity(1.f - SmoothStep01(Age / 0.8f));
+		}
 		return;
 	}
 	LeaveTime += InDeltaTime;
-	FadeOverlay->SetRenderOpacity(SmoothStep01(LeaveTime / 0.8f));
-	if (LeaveTime >= 0.9f && !bTravelled)
+	if (FadeOverlay)
+	{
+		FadeOverlay->SetRenderOpacity(SmoothStep01(LeaveTime / 0.8f));
+	}
+	// With nothing to fade, there is nothing to wait for.
+	if (LeaveTime >= (FadeOverlay ? 0.9f : 0.f) && !bTravelled)
 	{
 		bTravelled = true;
 		TravelToGame();

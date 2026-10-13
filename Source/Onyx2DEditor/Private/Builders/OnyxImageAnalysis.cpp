@@ -178,6 +178,44 @@ TOptional<FIntRect> FOnyxImageAnalysis::VisibleBounds(UTexture2D* Texture, const
 	return bFound ? TOptional<FIntRect>(Bounds) : TOptional<FIntRect>();
 }
 
+TArray<FIntRect> FOnyxImageAnalysis::CropToFeet(UTexture2D* Texture, const TArray<FIntRect>& Frames)
+{
+	FAlphaImage Image;
+	if (Frames.IsEmpty() || !ReadAlpha(Texture, Image.Alpha, Image.Size))
+	{
+		return Frames;
+	}
+	// The fewest empty rows any frame has under its lowest visible pixel (frames with nothing visible don't count).
+	int32 Rows = MAX_int32;
+	for (const FIntRect& Frame : Frames)
+	{
+		const FIntRect Clipped(Frame.Min.ComponentMax(FIntPoint::ZeroValue), Frame.Max.ComponentMin(Image.Size));
+		for (int32 Y = Clipped.Max.Y - 1; Y >= Clipped.Min.Y; --Y)
+		{
+			bool bVisible = false;
+			for (int32 X = Clipped.Min.X; X < Clipped.Max.X && !bVisible; ++X)
+			{
+				bVisible = Image.At(X, Y);
+			}
+			if (bVisible)
+			{
+				Rows = FMath::Min(Rows, Frame.Max.Y - 1 - Y);
+				break;
+			}
+		}
+	}
+	if (Rows == MAX_int32 || Rows <= 0)
+	{
+		return Frames;
+	}
+	TArray<FIntRect> Cropped = Frames;
+	for (FIntRect& Frame : Cropped)
+	{
+		Frame.Max.Y = FMath::Max(Frame.Max.Y - Rows, Frame.Min.Y + 1);
+	}
+	return Cropped;
+}
+
 float FOnyxImageAnalysis::GetCoverage(UTexture2D* Texture, const FIntRect& Rect)
 {
 	FAlphaImage Image;

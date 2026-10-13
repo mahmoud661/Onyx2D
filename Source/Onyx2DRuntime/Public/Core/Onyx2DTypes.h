@@ -20,6 +20,7 @@ enum class EOnyxFacing : uint8
 	Left
 };
 
+/** What a character is doing right now. The Moveset component plays the clip of the same name. */
 UENUM(BlueprintType)
 enum class EOnyxLocomotion : uint8
 {
@@ -34,17 +35,50 @@ enum class EOnyxLocomotion : uint8
 	Swim
 };
 
+/**
+ * Where a sprite draws, back to front. Everything 2D lives on the gameplay plane (Y = 0); the draw order decides what is
+ * in front, so two sprites never fight over the same pixels. Onyx2D picks the layer by itself (tile maps, props, items,
+ * characters, the player); an Onyx Draw Order component overrides it.
+ */
+UENUM(BlueprintType)
+enum class EOnyxDrawLayer : uint8
+{
+	/** Scenery behind the ground: houses, trees, hills (the Level Painter's Background layer). */
+	BehindTiles UMETA(DisplayName = "Behind Tiles"),
+	/** Tile maps. */
+	Tiles,
+	/** Things on the gameplay plane that don't move much: signs, switches, crates, decorations. */
+	Props,
+	/** Pickups and effects. */
+	Items,
+	/** Enemies and other characters. */
+	Characters,
+	/** The player's character: always in front of the rest of the gameplay. */
+	Player,
+	/** Decoration in front of everything (the Level Painter's Decor layer): foreground bushes, vines. */
+	InFront UMETA(DisplayName = "In Front"),
+};
+
 namespace Onyx2D
 {
+	/** Depth (Y) of tile maps: the gameplay plane, like everything 2D. The draw order puts them behind the gameplay. */
+	constexpr float TileMapDepth = 0.f;
+
 	/**
-	 * Depth (Y) of tile maps: just behind the gameplay plane (Y = 0), so characters, pickups and effects never
-	 * share a depth with background tiles (that z-fights: sprites flicker in and out).
+	 * The draw order reaches the sprite materials through this custom primitive data slot: a depth bias in cm, applied
+	 * along the view direction so the sprite never moves on screen (Onyx Draw Order subsystem).
 	 */
-	constexpr float TileMapDepth = -20.f;
-	/** Scenery painted behind the tiles (houses, trees): tile edges and grass overlap its base. */
-	constexpr float BackgroundObjectDepth = -40.f;
-	/** Decoration painted in front of everything on the gameplay plane (foreground bushes, vines). */
-	constexpr float ForegroundObjectDepth = 10.f;
+	constexpr int32 DrawOrderDataIndex = 7;
+	/** Depth between two draw layers, in cm. */
+	constexpr float DrawLayerStep = 2.f;
+	/** Actors in one layer get their own slot each: this many, this far apart (in cm). */
+	constexpr int32 DrawOrderSlots = 48;
+	constexpr float DrawOrderSlotStep = 0.03f;
+	/** Sprites inside one actor are ordered by their Translucency Sort Priority (clamped), this far apart. */
+	constexpr int32 DrawOrderMaxComponentPriority = 3;
+	constexpr float DrawOrderComponentStep = 0.004f;
+	/** The layer that sits at zero bias: sprites with materials that ignore the draw order draw as props. */
+	constexpr EOnyxDrawLayer DrawOrderBaseLayer = EOnyxDrawLayer::Props;
 
 	inline float FacingSign(EOnyxFacing Facing)
 	{

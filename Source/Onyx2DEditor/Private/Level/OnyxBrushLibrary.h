@@ -46,6 +46,8 @@ struct FOnyxPainterBrush
 	bool bProject = false;
 	/** Stand on the bottom of the cell (characters, player starts, your own objects) instead of sitting in its centre. */
 	bool bStandOnFloor = false;
+	/** Only recognises placed actors (so the canvas draws and moves them); not offered in the Objects list. */
+	bool bHiddenInPalette = false;
 	/** Object layer it goes to by default ("Entities" or "Decor"). */
 	FName DefaultLayer;
 	FLinearColor Color = FLinearColor::White;
