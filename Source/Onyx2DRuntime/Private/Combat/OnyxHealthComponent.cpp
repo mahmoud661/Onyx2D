@@ -17,6 +17,12 @@ void UOnyxHealthComponent::BeginPlay()
 bool UOnyxHealthComponent::IsInvulnerable() const
 {
 	const UWorld* World = GetWorld();
+	return bScriptedInvulnerable || (World && World->GetTimeSeconds() < InvulnerableUntil);
+}
+
+bool UOnyxHealthComponent::IsBrieflyInvulnerable() const
+{
+	const UWorld* World = GetWorld();
 	return World && World->GetTimeSeconds() < InvulnerableUntil;
 }
 

@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
+#include "Core/Onyx2DTypes.h"
 #include "OnyxMoveset.generated.h"
 
 class UOnyxClip;
@@ -13,6 +14,10 @@ class UOnyxClip;
  * send. The Moveset component plays Idle, Run, Jump, Fall, Dash, WallSlide, Crouch and Swim by itself; Hurt, Death and attacks
  * are played by the character; any other role by name from Blueprint (Play Clip). Several characters can share one.
  * Open it in the Moveset Editor.
+ *
+ * Top down, a role can be drawn once per direction: Walk_Down, Walk_Up and Walk_Side (looking right; flipped for the
+ * left), and for eight directions Walk_DownSide and Walk_UpSide too. Each falls back to the nearest one drawn, and to the
+ * plain role (Walk) when there are none.
  */
 UCLASS(BlueprintType)
 class ONYX2DRUNTIME_API UOnyxMoveset : public UObject
@@ -30,6 +35,22 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Moveset")
 	UOnyxClip* FindClip(FName Role) const;
+
+	/**
+	 * The clip a top-down character looking in Direction plays for Role: Role_Down, Role_Up, Role_Side, Role_DownSide or
+	 * Role_UpSide, else the nearest drawn, else Role itself. Shown (optional) is the direction the clip was drawn in, None
+	 * for the plain role.
+	 */
+	UOnyxClip* FindClip(FName Role, EOnyxDirection Direction, EOnyxDirection* OutShown) const;
+
+	/** Some roles are drawn looking diagonally (Role_DownSide, Role_UpSide): its characters look in eight directions. */
+	bool HasDiagonals() const;
+
+	/** The name of Role drawn looking in Direction (Walk + Up = Walk_Up); Role itself for None. */
+	static FName MakeDirectionalRole(FName Role, EOnyxDirection Direction);
+
+	/** The role a directional one is drawn for (Walk_Up: Walk, and Up in OutDirection); a plain role is its own (None). */
+	static FName GetBaseRole(FName Role, EOnyxDirection* OutDirection = nullptr);
 
 	/** The role of Clip in this moveset (None if it isn't in it). */
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Moveset")

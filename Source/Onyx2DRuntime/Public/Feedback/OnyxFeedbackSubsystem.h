@@ -23,7 +23,8 @@ public:
 
 	virtual void Deinitialize() override;
 
-	/** Slows global time for Duration real seconds. Overlapping requests extend the freeze. */
+	/** Slows global time for Duration real seconds, then gives back the speed it found (a slow motion stays on). Overlapping
+	 * requests extend the freeze. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Feedback")
 	void HitStop(float Duration = 0.06f, float TimeDilation = 0.05f);
 
@@ -33,7 +34,7 @@ public:
 
 	/** Tints every sprite/flipbook component of Actor for Duration seconds. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Feedback")
-	void FlashActor(AActor* Actor, FLinearColor Color = FLinearColor(1.f, 0.25f, 0.25f), float Duration = 0.12f);
+	void FlashActor(AActor* Actor, FLinearColor Color = FLinearColor::White, float Duration = 0.1f);
 
 	FOnyxTraumaSignature OnTrauma;
 
@@ -42,4 +43,6 @@ private:
 
 	FTSTicker::FDelegateHandle HitStopTicker;
 	double HitStopEndTime = 0.0;
+	/** The world's time dilation before the freeze started. */
+	float HitStopRestoreDilation = 1.f;
 };

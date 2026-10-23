@@ -97,7 +97,7 @@ public:
 	void ApplyMood(const FOnyxLightingMood& InMood);
 
 	/** The screen-space buffers the lighting subsystem draws every frame. */
-	void SetLightBuffers(UTexture* LightBuffer, UTexture* PositionBuffer);
+	void SetLightBuffers(UTexture* LightBuffer, UTexture* PositionBuffer, UTexture* OwnGlowBuffer, UTexture* HaloBuffer = nullptr);
 
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void BeginPlay() override;

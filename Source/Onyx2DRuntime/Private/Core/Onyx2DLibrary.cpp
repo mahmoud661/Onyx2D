@@ -3,6 +3,10 @@
 #include "Core/Onyx2DLibrary.h"
 #include "Components/MeshComponent.h"
 #include "Core/Onyx2DSettings.h"
+#include "Core/Onyx2DTypes.h"
+#include "Core/OnyxLevelData.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "PaperFlipbook.h"
@@ -19,6 +23,28 @@ void UOnyx2DLibrary::ConfigureSpriteLighting(UMeshComponent* SpriteComponent, bo
 		SpriteComponent->SetMaterial(0, LitMaterial);
 	}
 	SpriteComponent->SetCastShadow(bCastShadows);
+}
+
+void UOnyx2DLibrary::SetSpriteGlow(UPrimitiveComponent* Sprite, float Strength, float Threshold)
+{
+	if (!Sprite)
+	{
+		return;
+	}
+	const float Amount = FMath::Max(Strength, 0.f);
+	const float Which = Threshold < 0.f ? -1.f : FMath::Clamp(Threshold, 0.01f, 1.f);
+	const UWorld* World = Sprite->GetWorld();
+	if (World && World->IsGameWorld())
+	{
+		Sprite->SetCustomPrimitiveDataFloat(Onyx2D::GlowPixelsDataIndex, Amount);
+		Sprite->SetCustomPrimitiveDataFloat(Onyx2D::GlowThresholdDataIndex, Which);
+	}
+	else
+	{
+		// Placed in the editor (a level being built): the component's own saved data, so the level keeps it.
+		Sprite->SetDefaultCustomPrimitiveDataFloat(Onyx2D::GlowPixelsDataIndex, Amount);
+		Sprite->SetDefaultCustomPrimitiveDataFloat(Onyx2D::GlowThresholdDataIndex, Which);
+	}
 }
 
 void UOnyx2DLibrary::ApplySolidColor(UMeshComponent* Mesh, FLinearColor Color)
@@ -71,6 +97,12 @@ EOnyxFacing UOnyx2DLibrary::FacingFromDirection(float DirectionX, EOnyxFacing Cu
 		return Current;
 	}
 	return DirectionX > 0.f ? EOnyxFacing::Right : EOnyxFacing::Left;
+}
+
+EOnyxGameStyle UOnyx2DLibrary::GetGameStyle(const UObject* WorldContextObject)
+{
+	const UWorld* World = GEngine ? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull) : nullptr;
+	return UOnyxLevelData::GetGameStyle(World);
 }
 
 void UOnyx2DLibrary::CenterFlipbook(UPaperFlipbookComponent* Flipbook)

@@ -6,11 +6,15 @@ public class Onyx2DEditor : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
+		// The builder API in Public (content kit, asset utilities, tile and material builders, map painter) is used by games'
+		// own editor modules to build their content in C++.
+		PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "UnrealEd", "Paper2D", "Onyx2DRuntime" });
+
 		PrivateDependencyModuleNames.AddRange(new[]
 		{
-			"Core", "CoreUObject", "Engine", "InputCore", "UnrealEd", "Slate", "SlateCore", "ToolMenus",
-			"Paper2D", "PropertyEditor", "AssetRegistry", "LevelEditor", "WorkspaceMenuStructure", "Settings",
-			"Projects", "Onyx2DRuntime", "Onyx2DUI", "ContentBrowser", "PlacementMode", "MessageLog", "EditorFramework", "EngineSettings", "ToolWidgets", "AssetTools", "EditorWidgets", "Json", "MaterialEditor", "ImageCore", "DesktopPlatform", "GameProjectGeneration", "AssetDefinition", "BlueprintGraph", "EnhancedInput", "Kismet", "UMG", "UMGEditor"
+			"InputCore", "Slate", "SlateCore", "ToolMenus",
+			"PropertyEditor", "AssetRegistry", "LevelEditor", "WorkspaceMenuStructure", "Settings",
+			"Projects", "Onyx2DUI", "ContentBrowser", "PlacementMode", "MessageLog", "EditorFramework", "EngineSettings", "ToolWidgets", "AssetTools", "EditorWidgets", "Json", "MaterialEditor", "ImageCore", "DesktopPlatform", "GameProjectGeneration", "AssetDefinition", "BlueprintGraph", "EnhancedInput", "Kismet", "UMG", "UMGEditor", "AppFramework", "RHI"
 		});
 	}
 }

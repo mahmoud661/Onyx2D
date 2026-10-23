@@ -33,6 +33,7 @@
 #include "Style/OnyxEditorStyle.h"
 #include "Styling/SlateIconFinder.h"
 #include "World/OnyxCheckpoint.h"
+#include "World/OnyxBreakable.h"
 #include "World/OnyxHazardVolume.h"
 #include "World/OnyxLevelExit.h"
 #include "World/OnyxMovingPlatform.h"
@@ -288,6 +289,7 @@ void FOnyxBrushLibrary::Rebuild()
 		MakeBuiltin<AOnyxHazardVolume>(TEXT("Hazard"), INVTEXT("Hazard"), FLinearColor(1.f, 0.4f, 0.2f)),
 		MakeWater(),
 		MakeBuiltin<AOnyxPhysicsProp>(TEXT("PhysicsProp"), INVTEXT("Physics Prop"), FLinearColor(0.8f, 0.58f, 0.35f), true),
+		MakeBuiltin<AOnyxBreakable>(TEXT("Breakable"), INVTEXT("Breakable"), FLinearColor(0.86f, 0.7f, 0.36f), true),
 		MakeBuiltin<AOnyxLight2D>(TEXT("Light"), INVTEXT("2D Light"), FLinearColor(1.f, 0.9f, 0.45f)),
 		MakeBuiltin<AOnyxLightSwitch>(TEXT("LightSwitch"), INVTEXT("Light Switch"), FLinearColor(1.f, 0.82f, 0.3f), true),
 		MakeTriggerZone(),

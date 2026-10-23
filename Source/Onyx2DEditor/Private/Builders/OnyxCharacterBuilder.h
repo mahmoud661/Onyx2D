@@ -40,6 +40,17 @@ struct FOnyxCharacterSpec
 	int32 PixelsBelowFeet = 0;
 	/** Size the capsule to the visible pixels of Idle (or the first clip) and derive PixelsBelowFeet from them. */
 	bool bAutoFitCapsule = false;
+	/**
+	 * Art drawn on one ground line: every frame's pivot is this many rows above its bottom, so the feet stay put from clip
+	 * to clip (jumps and rolls that reach lower keep every pixel and their motion). -1: each clip is cut at its own
+	 * lowest visible pixels.
+	 */
+	int32 FeetRowsFromBottom = -1;
+	/**
+	 * Fit the capsule to the body only (Idle's dense columns: weapons, trails and effects left out) and turn every frame
+	 * on the body's middle, so the character is hit, and hits, where it is seen.
+	 */
+	bool bFitToBody = false;
 	/** Give every frame a normal map made from the art (shaded in relief by 2D lights). */
 	bool bGenerateNormalMap = true;
 	FOnyxNormalMapSettings NormalMap;
@@ -94,4 +105,6 @@ public:
 
 private:
 	static void FitCapsule(const FOnyxCharacterSpec& Spec, AOnyxCharacter* Defaults, int32& OutPixelsBelowFeet, FOnyxCharacterBuildResult& Result);
+	/** The body in Idle's frames laid over each other, in frame pixels (empty when it can't be read). */
+	static FIntRect FindBody(const FOnyxCharacterSpec& Spec);
 };

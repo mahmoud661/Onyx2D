@@ -2,7 +2,10 @@
 
 #include "Core/OnyxDrawOrderSubsystem.h"
 #include "Character/OnyxPlayerControlComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "Components/MeshComponent.h"
+#include "Core/OnyxLevelData.h"
+#include "GameFramework/Character.h"
 #include "Core/OnyxDrawOrderComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -103,6 +106,10 @@ void UOnyxDrawOrderSubsystem::HandleActorAdded(AActor* Actor)
 
 void UOnyxDrawOrderSubsystem::Tick(float DeltaTime)
 {
+	if (!Movers.IsEmpty())
+	{
+		RefreshMovers();
+	}
 	SinceRefresh += DeltaTime;
 	if (SinceRefresh >= RefreshInterval)
 	{
@@ -149,6 +156,69 @@ EOnyxDrawLayer UOnyxDrawOrderSubsystem::FindLayer(const AActor* Actor)
 	return EOnyxDrawLayer::Props;
 }
 
+bool UOnyxDrawOrderSubsystem::IsSortedByFeet(EOnyxDrawLayer Layer)
+{
+	return Layer == EOnyxDrawLayer::Props || Layer == EOnyxDrawLayer::Items || Layer == EOnyxDrawLayer::Characters || Layer == EOnyxDrawLayer::Player;
+}
+
+float UOnyxDrawOrderSubsystem::GetTopDownBias(EOnyxDrawLayer Layer, float FeetZ, int32 Slot, int32 ComponentPriority)
+{
+	const int32 Priority = FMath::Clamp(ComponentPriority, -Onyx2D::DrawOrderMaxComponentPriority, Onyx2D::DrawOrderMaxComponentPriority);
+	const float Inside = Priority * Onyx2D::TopDownComponentStep;
+	const float Beyond = Onyx2D::TopDownSortRange + Onyx2D::DrawLayerStep;
+	switch (Layer)
+	{
+	case EOnyxDrawLayer::BehindTiles: return -Beyond - Onyx2D::DrawLayerStep + Inside;
+	case EOnyxDrawLayer::Tiles:       return -Beyond + Inside;
+	case EOnyxDrawLayer::InFront:     return Beyond + Inside;
+	default:
+	{
+		// Lower on the screen, nearer. Two at the same height keep their slots' order (all the slots within half a pixel).
+		const float SlotOffset = (FMath::Clamp(Slot, 0, Onyx2D::DrawOrderSlots - 1) - Onyx2D::DrawOrderSlots / 2) * Onyx2D::TopDownSlotStep;
+		return FMath::Clamp(-FeetZ * Onyx2D::TopDownSortScale, -Onyx2D::TopDownSortRange, Onyx2D::TopDownSortRange) + Inside + SlotOffset;
+	}
+	}
+}
+
+float UOnyxDrawOrderSubsystem::FindFeetZ(const AActor* Actor)
+{
+	if (const ACharacter* Character = Cast<ACharacter>(Actor))
+	{
+		const UCapsuleComponent* Capsule = Character->GetCapsuleComponent();
+		return Character->GetActorLocation().Z - (Capsule ? Capsule->GetScaledCapsuleHalfHeight() : 0.f);
+	}
+	float Bottom = TNumericLimits<float>::Max();
+	TInlineComponentArray<UMeshComponent*> Meshes(Actor);
+	for (const UMeshComponent* Mesh : Meshes)
+	{
+		if (Mesh && Mesh->IsRegistered() && Mesh->IsVisible())
+		{
+			Bottom = FMath::Min(Bottom, float(Mesh->Bounds.Origin.Z - Mesh->Bounds.BoxExtent.Z));
+		}
+	}
+	return Bottom < TNumericLimits<float>::Max() ? Bottom : float(Actor->GetActorLocation().Z);
+}
+
+bool UOnyxDrawOrderSubsystem::IsTopDownWorld() const
+{
+	return UOnyxLevelData::GetGameStyle(GetWorld()) == EOnyxGameStyle::TopDown;
+}
+
+void UOnyxDrawOrderSubsystem::RefreshMovers()
+{
+	for (auto It = Movers.CreateIterator(); It; ++It)
+	{
+		if (AActor* Actor = It->Get())
+		{
+			Refresh(Actor);
+		}
+		else
+		{
+			It.RemoveCurrent();
+		}
+	}
+}
+
 float UOnyxDrawOrderSubsystem::GetBias(EOnyxDrawLayer Layer, int32 Slot, int32 ComponentPriority)
 {
 	const int32 LayerOffset = int32(Layer) - int32(Onyx2D::DrawOrderBaseLayer);
@@ -168,7 +238,10 @@ int32 UOnyxDrawOrderSubsystem::FindSlot(const AActor* Actor, EOnyxDrawLayer Laye
 	{
 		return *Known;
 	}
-	int32& Next = NextSlot[FMath::Clamp(int32(Layer), 0, int32(UE_ARRAY_COUNT(NextSlot)) - 1)];
+	// Top down the layers sorted by their feet share one depth scale, so they take turns together too (else the player and
+	// the first prop would both get the first slot, and tie where they stand level).
+	const EOnyxDrawLayer Turns = IsSortedByFeet(Layer) && IsTopDownWorld() ? EOnyxDrawLayer::Props : Layer;
+	int32& Next = NextSlot[FMath::Clamp(int32(Turns), 0, int32(UE_ARRAY_COUNT(NextSlot)) - 1)];
 	const int32 Slot = Next;
 	Next = (Next + 1) % Onyx2D::DrawOrderSlots;
 	Slots.Add(Actor, Slot);
@@ -188,6 +261,26 @@ void UOnyxDrawOrderSubsystem::Refresh(AActor* Actor)
 	}
 	const EOnyxDrawLayer Layer = FindLayer(Actor);
 	const int32 Slot = FindSlot(Actor, Layer);
+	if (IsTopDownWorld())
+	{
+		const bool bByFeet = IsSortedByFeet(Layer);
+		const float FeetZ = bByFeet ? FindFeetZ(Actor) : 0.f;
+		for (UMeshComponent* Mesh : Meshes)
+		{
+			if (Mesh && Mesh->IsRegistered())
+			{
+				ApplyBias(Mesh, GetTopDownBias(Layer, FeetZ, Slot, Mesh->TranslucencySortPriority));
+			}
+		}
+		// Things that move are sorted again every frame as they go.
+		const USceneComponent* Root = Actor->GetRootComponent();
+		if (bByFeet && Root && Root->Mobility == EComponentMobility::Movable && GetWorld()->IsGameWorld())
+		{
+			Movers.Add(Actor);
+		}
+		return;
+	}
+	Movers.Remove(Actor);
 	for (UMeshComponent* Mesh : Meshes)
 	{
 		if (Mesh && Mesh->IsRegistered())

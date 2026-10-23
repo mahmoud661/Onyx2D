@@ -1,6 +1,7 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "Character/OnyxBehaviourLibrary.h"
+#include "AI/OnyxEnemyAIComponent.h"
 #include "AI/OnyxPatrolComponent.h"
 #include "Camera/OnyxCameraComponent.h"
 #include "Character/OnyxPlayerControlComponent.h"
@@ -22,6 +23,7 @@ UClass* UOnyxBehaviourLibrary::GetComponentClass(EOnyxBehaviour Behaviour)
 	case EOnyxBehaviour::ContactDamage: return UOnyxContactDamageComponent::StaticClass();
 	case EOnyxBehaviour::Stompable: return UOnyxStompableComponent::StaticClass();
 	case EOnyxBehaviour::Talk: return UOnyxTalkComponent::StaticClass();
+	case EOnyxBehaviour::EnemyAI: return UOnyxEnemyAIComponent::StaticClass();
 	default: return nullptr;
 	}
 }
@@ -29,7 +31,7 @@ UClass* UOnyxBehaviourLibrary::GetComponentClass(EOnyxBehaviour Behaviour)
 const TArray<EOnyxBehaviour>& UOnyxBehaviourLibrary::GetAll()
 {
 	static const TArray<EOnyxBehaviour> All = { EOnyxBehaviour::PlayerControl, EOnyxBehaviour::Camera, EOnyxBehaviour::Respawn,
-		EOnyxBehaviour::Patrol, EOnyxBehaviour::ContactDamage, EOnyxBehaviour::Stompable, EOnyxBehaviour::Talk };
+		EOnyxBehaviour::Patrol, EOnyxBehaviour::ContactDamage, EOnyxBehaviour::Stompable, EOnyxBehaviour::EnemyAI, EOnyxBehaviour::Talk };
 	return All;
 }
 

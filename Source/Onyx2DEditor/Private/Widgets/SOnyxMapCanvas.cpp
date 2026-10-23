@@ -1,6 +1,18 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "Widgets/SOnyxMapCanvas.h"
+#include "Editor.h"
+#include "EngineUtils.h"
+#include "Engine/Texture2D.h"
+#include "GameFramework/PlayerStart.h"
+#include "Builders/OnyxAssetUtils.h"
+#include "Camera/OnyxCameraComponent.h"
+#include "Engine/Blueprint.h"
+#include "GameFramework/GameModeBase.h"
+#include "GameFramework/WorldSettings.h"
+#include "GameMapsSettings.h"
+#include "Lighting/OnyxLightingEnvironment.h"
+#include "World/OnyxParallaxBackground.h"
 #include "Level/OnyxBrushLibrary.h"
 #include "Level/OnyxMapPainter.h"
 #include "Engine/Texture2D.h"
@@ -79,11 +91,29 @@ namespace
 	}
 }
 
+// Sets the view from the console (scripted captures, no mouse): named, unity builds merge files.
+namespace OnyxCanvasView
+{
+	float PendingZoom = 0.f;
+	FIntPoint PendingCell(INDEX_NONE, INDEX_NONE);
+
+	FAutoConsoleCommand ZoomCommand(TEXT("Onyx2D.PainterZoom"),
+		TEXT("Zooms the Level Painter's canvas: Onyx2D.PainterZoom <zoom> [column row] (centred on that cell, else on the map's middle)."),
+		FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+		{
+			PendingZoom = Args.IsEmpty() ? 0.f : FCString::Atof(*Args[0]);
+			PendingCell = Args.Num() >= 3 ? FIntPoint(FCString::Atoi(*Args[1]), FCString::Atoi(*Args[2])) : FIntPoint(INDEX_NONE, INDEX_NONE);
+		}));
+}
+
 void SOnyxMapCanvas::Construct(const FArguments& InArgs)
 {
 	Painter = InArgs._Painter;
 	ShowGrid = InArgs._ShowGrid;
 	ShowCollision = InArgs._ShowCollision;
+	ShowParallax = InArgs._ShowParallax;
+	SelectedImageLayer = InArgs._SelectedImageLayer;
+	HiddenImageLayers = InArgs._HiddenImageLayers;
 	HiddenObjectLayers = InArgs._HiddenObjectLayers;
 	HiddenLayers = InArgs._HiddenLayers;
 	PreviewStamp = InArgs._PreviewStamp;
@@ -96,6 +126,7 @@ void SOnyxMapCanvas::Construct(const FArguments& InArgs)
 	OnResizeMap = InArgs._OnResizeMap;
 	TileBrush.DrawAs = ESlateBrushDrawType::Image;
 	SpriteBrush.DrawAs = ESlateBrushDrawType::Image;
+	ParallaxBrush.DrawAs = ESlateBrushDrawType::Image;
 	SetClipping(EWidgetClipping::ClipToBounds);
 }
 
@@ -128,6 +159,8 @@ void SOnyxMapCanvas::FitTo(const FVector2D& Area) const
 	Zoom = FMath::Clamp(FMath::Min((Area.X - 48.f) / MapPixels.X, (Area.Y - 48.f) / MapPixels.Y), MinZoom, MaxZoom);
 	Pan = (Area - MapPixels * Zoom) * 0.5f;
 	bFitRequested = false;
+	bKeepFitted = true;
+	FittedArea = Area;
 }
 
 void SOnyxMapCanvas::DrawTile(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, const FPaperTileInfo& Tile,
@@ -139,9 +172,10 @@ void SOnyxMapCanvas::DrawTile(FSlateWindowElementList& OutDrawElements, int32 La
 	{
 		return;
 	}
-	const FIntPoint TextureSize = Texture->GetImportedSize();
+	// UVs are measured against the texture as the GPU has it (a sheet padded to a power of two is bigger than the picture).
+	const FVector2f TextureSize(Texture->GetSurfaceWidth(), Texture->GetSurfaceHeight());
 	const FIntPoint TileSize = Tile.TileSet->GetTileSize();
-	if (TextureSize.X <= 0 || TextureSize.Y <= 0)
+	if (TextureSize.X <= 0.f || TextureSize.Y <= 0.f)
 	{
 		return;
 	}
@@ -176,7 +210,7 @@ void SOnyxMapCanvas::DrawBrush(FSlateWindowElementList& OutDrawElements, int32 L
 	if (Library.GetPreviewSprite(Brush, Texture, Rect, FPlatformTime::Seconds()))
 	{
 		// The sprite itself, scaled with the map and standing on the cell bottom (it may be bigger than a cell).
-		const FIntPoint TextureSize = Texture->GetImportedSize();
+		const FVector2f TextureSize(FMath::Max(Texture->GetSurfaceWidth(), 1.f), FMath::Max(Texture->GetSurfaceHeight(), 1.f));
 		const float PixelScale = CellSize.X / FMath::Max(Painter->GetTileSize().X, 1);
 		const FVector2f Size(Rect.Width() * PixelScale, Rect.Height() * PixelScale);
 		SpriteBrush.SetResourceObject(Texture);
@@ -332,6 +366,255 @@ bool SOnyxMapCanvas::DrawActorSprites(FSlateWindowElementList& OutDrawElements, 
 	return true;
 }
 
+FVector2D SOnyxMapCanvas::GetGameViewHalfSize(UWorld* World) const
+{
+	if (ViewSizeWorld.Get() == World && ViewHalfSize.X > 0.0)
+	{
+		return ViewHalfSize;
+	}
+	float ViewHeight = FOnyxCameraSettings().ViewHeight;
+	const AWorldSettings* Settings = World ? World->GetWorldSettings() : nullptr;
+	UClass* Mode = Settings && Settings->DefaultGameMode ? Settings->DefaultGameMode.Get() : nullptr;
+	if (!Mode)
+	{
+		Mode = LoadClass<AGameModeBase>(nullptr, *UGameMapsSettings::GetGlobalDefaultGameMode());
+	}
+	UClass* PawnClass = Mode ? Mode->GetDefaultObject<AGameModeBase>()->DefaultPawnClass.Get() : nullptr;
+	const UOnyxCameraComponent* Camera = nullptr;
+	for (UClass* Class = PawnClass; Class && !Camera; Class = Class->GetSuperClass())
+	{
+		// A Blueprint's components are templates in it; a C++ pawn's are on its defaults.
+		if (UBlueprint* Blueprint = UBlueprint::GetBlueprintFromClass(Class))
+		{
+			Camera = FOnyxAssetUtils::FindComponentTemplate<UOnyxCameraComponent>(Blueprint);
+		}
+		else if (const AActor* Defaults = Class->GetDefaultObject<AActor>())
+		{
+			Camera = Defaults->FindComponentByClass<UOnyxCameraComponent>();
+		}
+	}
+	if (Camera)
+	{
+		ViewHeight = Camera->Settings.ViewHeight;
+	}
+	ViewSizeWorld = World;
+	ViewHalfSize = FVector2D(ViewHeight * 0.5 * 16.0 / 9.0, ViewHeight * 0.5); // a 16:9 screen
+	return ViewHalfSize;
+}
+
+// Where an image layer is (named: unity builds merge files).
+namespace OnyxCanvasBackdrop
+{
+	/** One copy of the layer's picture is this wide (cm); 0 for a plain colour or a mist. */
+	double PictureWidth(const FOnyxParallaxLayer& Layer)
+	{
+		// The picture's shape from its imported size, as the game builds it (the GPU size is a placeholder while it compiles).
+		const UTexture2D* Texture = Layer.Material.IsNull() ? Layer.Texture.Get() : nullptr;
+		const FIntPoint Pixels = Texture ? Texture->GetImportedSize() : FIntPoint::ZeroValue;
+		return Pixels.X > 0 && Pixels.Y > 0 ? Layer.Height * Pixels.X / Pixels.Y : 0.0;
+	}
+
+	/** The middle of the layer's picture (world X, Z), moved by its Factor of the camera's travel (Delta). */
+	FVector2D Middle(const AOnyxParallaxBackground& Background, const FOnyxParallaxLayer& Layer, const FVector& Delta)
+	{
+		const FVector Anchor = Background.GetActorLocation();
+		return FVector2D(Anchor.X + Layer.OffsetX + Delta.X * Layer.Factor.X, Anchor.Z + Layer.OffsetZ + Delta.Z * Layer.Factor.Y);
+	}
+
+	/** The layer's own picture (world X / Z box): a repeating layer's copy nearest NearX (the view's middle); a colour band's whole width. */
+	FBox2D OwnPicture(const AOnyxParallaxBackground& Background, const FOnyxParallaxLayer& Layer, const FVector& Delta, double NearX)
+	{
+		const FVector2D At = Middle(Background, Layer, Delta);
+		const double Width = PictureWidth(Layer);
+		const double Half = Layer.Height * 0.5;
+		if (Width <= 0.0)
+		{
+			return FBox2D(FVector2D(At.X - Background.TotalWidth * 0.5, At.Y - Half), FVector2D(At.X + Background.TotalWidth * 0.5, At.Y + Half));
+		}
+		if (!Layer.bRepeat)
+		{
+			return FBox2D(FVector2D(At.X - Width * 0.5, At.Y - Half), FVector2D(At.X + Width * 0.5, At.Y + Half));
+		}
+		// Copies start at the strip's left edge (as the material tiles it).
+		const double Left = At.X - Background.TotalWidth * 0.5;
+		const double Copies = FMath::Max(FMath::CeilToDouble(Background.TotalWidth / Width), 1.0);
+		const double CopyLeft = Left + FMath::Clamp(FMath::FloorToDouble((NearX - Left) / Width), 0.0, Copies - 1.0) * Width;
+		return FBox2D(FVector2D(CopyLeft, At.Y - Half), FVector2D(CopyLeft + Width, At.Y + Half));
+	}
+}
+
+const AOnyxParallaxBackground* SOnyxMapCanvas::FindParallax() const
+{
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		return nullptr;
+	}
+	const AOnyxParallaxBackground* Background = ParallaxActor.Get();
+	if (!Background || Background->GetWorld() != World)
+	{
+		Background = nullptr;
+		for (TActorIterator<AOnyxParallaxBackground> It(World); It; ++It)
+		{
+			Background = *It;
+			break;
+		}
+		ParallaxActor = Background;
+	}
+	return Background;
+}
+
+FVector SOnyxMapCanvas::GetParallaxCameraDelta() const
+{
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World || !Painter || !Painter->FindMapActor() || !ShowParallax.Get())
+	{
+		return FVector::ZeroVector;
+	}
+	const FIntPoint MapCells = Painter->GetMapSize();
+	const FIntPoint TileSize = Painter->GetTileSize();
+	const FVector CornerA = Painter->MapPixelsToWorld(FVector2D::ZeroVector);
+	const FVector CornerB = Painter->MapPixelsToWorld(FVector2D(MapCells.X * TileSize.X, MapCells.Y * TileSize.Y));
+	const FVector MapLow(FMath::Min(CornerA.X, CornerB.X), 0.0, FMath::Min(CornerA.Z, CornerB.Z));
+	const FVector MapHigh(FMath::Max(CornerA.X, CornerB.X), 0.0, FMath::Max(CornerA.Z, CornerB.Z));
+	const FVector2D Half = GetGameViewHalfSize(World);
+	auto Confine = [&](FVector Point)
+	{
+		const double LowX = MapLow.X + Half.X;
+		const double HighX = MapHigh.X - Half.X;
+		const double LowZ = MapLow.Z + Half.Y;
+		const double HighZ = MapHigh.Z - Half.Y;
+		Point.X = LowX <= HighX ? FMath::Clamp(Point.X, LowX, HighX) : (MapLow.X + MapHigh.X) * 0.5;
+		Point.Z = LowZ <= HighZ ? FMath::Clamp(Point.Z, LowZ, HighZ) : (MapLow.Z + MapHigh.Z) * 0.5;
+		return Point;
+	};
+	const FVector Camera = Confine(Painter->MapPixelsToWorld(GetViewCenterMapPixels()));
+	FVector Start = Camera;
+	for (TActorIterator<APlayerStart> It(World); It; ++It)
+	{
+		Start = Confine(It->GetActorLocation());
+		break;
+	}
+	return Camera - Start;
+}
+
+TOptional<FBox2D> SOnyxMapCanvas::GetImageLayerRect(int32 LayerIndex) const
+{
+	const AOnyxParallaxBackground* Background = FindParallax();
+	if (!Background || !Background->BackgroundLayers.IsValidIndex(LayerIndex) || !Painter || !Painter->FindMapActor())
+	{
+		return {};
+	}
+	const double ViewX = Painter->MapPixelsToWorld(GetViewCenterMapPixels()).X;
+	const FBox2D Picture = OnyxCanvasBackdrop::OwnPicture(*Background, Background->BackgroundLayers[LayerIndex], GetParallaxCameraDelta(), ViewX);
+	const FVector2D A = Painter->WorldToMapPixels(FVector(Picture.Min.X, 0.0, Picture.Max.Y));
+	const FVector2D B = Painter->WorldToMapPixels(FVector(Picture.Max.X, 0.0, Picture.Min.Y));
+	return FBox2D(A.ComponentMin(B), A.ComponentMax(B));
+}
+
+int32 SOnyxMapCanvas::DrawParallax(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, const FVector2D& Area,
+	const FVector2f& MapMin, const FVector2f& MapPixels) const
+{
+	const AOnyxParallaxBackground* Background = FindParallax();
+	const double CmPerPixel = (Painter->MapPixelsToWorld(FVector2D(1.0, 0.0)) - Painter->MapPixelsToWorld(FVector2D::ZeroVector)).Size();
+	if (!Background || CmPerPixel <= 0.0)
+	{
+		return LayerId;
+	}
+	// Inside the map only: the game's camera never looks past it.
+	const FVector2f ClipMin = MapMin.ComponentMax(FVector2f::ZeroVector);
+	const FVector2f ClipMax = (MapMin + MapPixels).ComponentMin(FVector2f(Area));
+	if (ClipMax.X <= ClipMin.X || ClipMax.Y <= ClipMin.Y)
+	{
+		return LayerId;
+	}
+	const FVector Delta = GetParallaxCameraDelta();
+	FLinearColor Mood = FLinearColor::White;
+	for (TActorIterator<AOnyxLightingEnvironment> It(Background->GetWorld()); It; ++It)
+	{
+		Mood = It->GetBaseMood().BackgroundTint;
+		break;
+	}
+	auto ToLocal = [&](double X, double Z) { return MapMin + FVector2f(Painter->WorldToMapPixels(FVector(X, 0.0, Z))) * Zoom; };
+
+	// The farthest first (what is nearer covers it, as in the game).
+	const TSet<int32> Hidden = HiddenImageLayers.Get();
+	TArray<int32> Order;
+	for (int32 Index = 0; Index < Background->BackgroundLayers.Num(); ++Index)
+	{
+		if (Background->BackgroundLayers[Index].bVisible && !Hidden.Contains(Index))
+		{
+			Order.Add(Index);
+		}
+	}
+	const TArray<FOnyxParallaxLayer>& Layers = Background->BackgroundLayers;
+	Order.StableSort([&Layers](int32 A, int32 B) { return Layers[A].Depth > Layers[B].Depth; });
+
+	OutDrawElements.PushClip(FSlateClippingZone(FSlateRect(Geometry.LocalToAbsolute(FVector2D(ClipMin)), Geometry.LocalToAbsolute(FVector2D(ClipMax)))));
+	int32 Draw = LayerId;
+	for (const int32 Index : Order)
+	{
+		const FOnyxParallaxLayer& Layer = Layers[Index];
+		const FVector2D At = OnyxCanvasBackdrop::Middle(*Background, Layer, Delta);
+		const double Top = At.Y + Layer.Height * 0.5;
+		const double PictureBottom = At.Y - Layer.Height * 0.5;
+		const double Bottom = PictureBottom - Layer.ExtendBelow;
+		FLinearColor Color(Layer.Tint.R * Mood.R, Layer.Tint.G * Mood.G, Layer.Tint.B * Mood.B, Layer.Tint.A);
+		const double Width = OnyxCanvasBackdrop::PictureWidth(Layer);
+		if (Width <= 0.0)
+		{
+			// A plain colour, or a mist drawn by its own material: a band of its tint (mist is patchy: about half of it).
+			Color.A *= Layer.Material.IsNull() ? 1.f : 0.5f;
+			const FVector2f A = ToLocal(At.X - Background->TotalWidth * 0.5, Top);
+			const FVector2f B = ToLocal(At.X + Background->TotalWidth * 0.5, Bottom);
+			DrawRect(OutDrawElements, Draw++, Geometry, A.ComponentMin(B), (B - A).GetAbs(), Color);
+			continue;
+		}
+		UTexture2D* Texture = Layer.Texture;
+		const float TextureHeight = Texture->GetSurfaceHeight();
+		// Once where it is placed, or copies side by side across the strip (the last one cut where the strip ends).
+		const double StripLeft = Layer.bRepeat ? At.X - Background->TotalWidth * 0.5 : At.X - Width * 0.5;
+		const double StripRight = Layer.bRepeat ? At.X + Background->TotalWidth * 0.5 : At.X + Width * 0.5;
+		const float CopyLocal = float(Width / CmPerPixel) * Zoom;
+		if (CopyLocal < 0.5f)
+		{
+			continue;
+		}
+		const float StripLeftLocal = ToLocal(StripLeft, Top).X;
+		const int32 Copies = FMath::Max(FMath::CeilToInt((StripRight - StripLeft) / Width), 1);
+		const int32 First = FMath::Max(FMath::FloorToInt((ClipMin.X - StripLeftLocal) / CopyLocal), 0);
+		const int32 Last = FMath::Min(FMath::FloorToInt((ClipMax.X - StripLeftLocal) / CopyLocal), Copies - 1);
+		if (Last - First > 600)
+		{
+			continue;
+		}
+		const float TopLocal = ToLocal(At.X, Top).Y;
+		const float PictureBottomLocal = ToLocal(At.X, PictureBottom).Y;
+		const float BottomLocal = ToLocal(At.X, Bottom).Y;
+		ParallaxBrush.SetResourceObject(Texture);
+		for (int32 Copy = First; Copy <= Last; ++Copy)
+		{
+			const double CopyLeft = StripLeft + Copy * Width;
+			const double Shown = FMath::Min(Width, StripRight - CopyLeft) / Width; // the part of the last copy inside the strip
+			const float X = StripLeftLocal + Copy * CopyLocal;
+			const float W = CopyLocal * float(Shown);
+			ParallaxBrush.SetUVRegion(FBox2f(FVector2f(0.f, 0.f), FVector2f(float(Shown), 1.f)));
+			FSlateDrawElement::MakeBox(OutDrawElements, Draw, Geometry.ToPaintGeometry(FVector2f(W, PictureBottomLocal - TopLocal), FSlateLayoutTransform(FVector2f(X, TopLocal))),
+				&ParallaxBrush, ESlateDrawEffect::None, Color);
+			if (BottomLocal > PictureBottomLocal + 0.5f && TextureHeight > 0.f)
+			{
+				// Below the picture its last row carries on down (Extend Below).
+				ParallaxBrush.SetUVRegion(FBox2f(FVector2f(0.f, (TextureHeight - 1.f) / TextureHeight), FVector2f(float(Shown), 1.f)));
+				FSlateDrawElement::MakeBox(OutDrawElements, Draw, Geometry.ToPaintGeometry(FVector2f(W, BottomLocal - PictureBottomLocal),
+					FSlateLayoutTransform(FVector2f(X, PictureBottomLocal))), &ParallaxBrush, ESlateDrawEffect::None, Color);
+			}
+		}
+		++Draw;
+	}
+	OutDrawElements.PopClip();
+	return FMath::Max(Draw, LayerId + 1);
+}
+
 int32 SOnyxMapCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
 	FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
 {
@@ -343,10 +626,21 @@ int32 SOnyxMapCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 	{
 		return LayerId + 1;
 	}
+	LastArea = Area;
 	FollowMapCorner();
-	if (bFitRequested)
+	if (bFitRequested || (bKeepFitted && !Area.Equals(FittedArea, 1.0)))
 	{
 		FitTo(Area);
+	}
+	if (OnyxCanvasView::PendingZoom > 0.f)
+	{
+		const FIntPoint Size = Painter->GetMapSize();
+		const FIntPoint Cell = Painter->IsValidCell(OnyxCanvasView::PendingCell) ? OnyxCanvasView::PendingCell : Size / 2;
+		const FIntPoint CellPixels = Painter->GetTileSize();
+		Zoom = FMath::Clamp(OnyxCanvasView::PendingZoom, MinZoom, MaxZoom);
+		Pan = Area * 0.5 - FVector2D((Cell.X + 0.5) * CellPixels.X, (Cell.Y + 0.5) * CellPixels.Y) * Zoom;
+		bKeepFitted = false;
+		OnyxCanvasView::PendingZoom = 0.f;
 	}
 
 	const FIntPoint Tile = Painter->GetTileSize();
@@ -358,6 +652,14 @@ int32 SOnyxMapCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 	DrawRect(OutDrawElements, LayerId + 1, AllottedGeometry, MapMin + FVector2f(6.f, 6.f), MapPixels, FLinearColor(0.f, 0.f, 0.f, 0.45f));
 	DrawRect(OutDrawElements, LayerId + 2, AllottedGeometry, MapMin, MapPixels, MapColor);
 
+	// The image layers, the tiles over them.
+	const int32 AfterBackdrop = DrawParallax(OutDrawElements, LayerId + 3, AllottedGeometry, Area, MapMin, MapPixels);
+	const bool bImages = AfterBackdrop > LayerId + 3;
+	if (bImages)
+	{
+		LayerId = AfterBackdrop - 2; // tiles and the rest draw above it
+	}
+
 	// Visible cell range only.
 	const FIntPoint First = LocalToCell(FVector2D::ZeroVector).ComponentMax(FIntPoint::ZeroValue);
 	const FIntPoint Last = LocalToCell(Area).ComponentMin(MapSize - FIntPoint(1, 1));
@@ -365,13 +667,14 @@ int32 SOnyxMapCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 	// Tile layers, back (last) to front (0); the active one is fully opaque.
 	const TSet<int32> Hidden = HiddenLayers.Get();
 	int32 DrawLayer = LayerId + 3;
-	for (int32 LayerIndex = Painter->GetLayerCount() - 1; LayerIndex >= 0; --LayerIndex, ++DrawLayer)
+	for (int32 LayerIndex = Painter->GetLayerCount() - 1; LayerIndex >= 0; --LayerIndex, DrawLayer += 2)
 	{
 		if (Hidden.Contains(LayerIndex))
 		{
 			continue;
 		}
-		const FLinearColor Tint = LayerIndex == Painter->GetLayer() ? FLinearColor::White : FLinearColor(1.f, 1.f, 1.f, 0.72f);
+		const bool bActive = LayerIndex == Painter->GetLayer();
+		const FLinearColor Tint = bActive ? FLinearColor::White : FLinearColor(1.f, 1.f, 1.f, 0.72f);
 		for (int32 Y = First.Y; Y <= Last.Y; ++Y)
 		{
 			for (int32 X = First.X; X <= Last.X; ++X)
@@ -379,7 +682,13 @@ int32 SOnyxMapCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 				const FPaperTileInfo Info = Painter->GetCell(FIntPoint(X, Y), LayerIndex);
 				if (Info.IsValid())
 				{
-					DrawTile(OutDrawElements, DrawLayer, AllottedGeometry, Info, CellToLocal(FIntPoint(X, Y)), CellSize.X, Tint);
+					const FVector2f Cell = CellToLocal(FIntPoint(X, Y));
+					if (!bActive && bImages)
+					{
+						// A faded wall still hides the pictures behind it, as in the game: its shape in the map's colour first.
+						DrawTile(OutDrawElements, DrawLayer, AllottedGeometry, Info, Cell, CellSize.X, FLinearColor(MapColor.R, MapColor.G, MapColor.B, 1.f));
+					}
+					DrawTile(OutDrawElements, DrawLayer + 1, AllottedGeometry, Info, Cell, CellSize.X, Tint);
 				}
 			}
 		}
@@ -402,6 +711,14 @@ int32 SOnyxMapCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 				if (Type == EOnyxTileCollision::OneWay)
 				{
 					DrawRect(OutDrawElements, DrawLayer, AllottedGeometry, Min, FVector2f(CellSize.X, FMath::Max(CellSize.Y * 0.2f, 2.f)), Color.CopyWithNewOpacity(0.85f));
+				}
+				else if (Type == EOnyxTileCollision::SlopeUp || Type == EOnyxTileCollision::SlopeDown)
+				{
+					// The slope's line, the solid side shaded faintly.
+					DrawRect(OutDrawElements, DrawLayer, AllottedGeometry, Min, CellSize, Color.CopyWithNewOpacity(0.14f));
+					const bool bUp = Type == EOnyxTileCollision::SlopeUp;
+					TArray<FVector2f> Slope = { Min + FVector2f(0.f, bUp ? CellSize.Y : 0.f), Min + FVector2f(CellSize.X, bUp ? 0.f : CellSize.Y) };
+					FSlateDrawElement::MakeLines(OutDrawElements, DrawLayer, AllottedGeometry.ToPaintGeometry(), Slope, ESlateDrawEffect::None, Color.CopyWithNewOpacity(0.9f), true, 2.f);
 				}
 				else
 				{
@@ -530,6 +847,18 @@ int32 SOnyxMapCanvas::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 		DrawOutline(OutDrawElements, DrawLayer + 3, AllottedGeometry, Min, OutlineSize, FLinearColor(1.f, 1.f, 1.f, 0.85f), 1.5f);
 	}
 	DrawMapEdges(OutDrawElements, DrawLayer + 4, AllottedGeometry, MapMin, MapMin + MapPixels, CellSize);
+	if (const TOptional<FBox2D> Picture = GetImageLayerRect(SelectedImageLayer.Get()))
+	{
+		// The image layer being edited: its picture outlined, a handle on each corner to resize it.
+		const FVector2f Min = MapMin + FVector2f(Picture->Min) * Zoom;
+		const FVector2f Max = MapMin + FVector2f(Picture->Max) * Zoom;
+		DrawOutline(OutDrawElements, DrawLayer + 4, AllottedGeometry, Min, Max - Min, OnyxTools::Accent(), 2.f);
+		for (const FVector2f& Corner : { Min, FVector2f(Max.X, Min.Y), Max, FVector2f(Min.X, Max.Y) })
+		{
+			DrawRect(OutDrawElements, DrawLayer + 5, AllottedGeometry, Corner - FVector2f(5.f), FVector2f(10.f), OnyxTools::Accent());
+			DrawRect(OutDrawElements, DrawLayer + 6, AllottedGeometry, Corner - FVector2f(3.f), FVector2f(6.f), FLinearColor::White);
+		}
+	}
 	return DrawLayer + 7;
 }
 
@@ -752,6 +1081,7 @@ FReply SOnyxMapCanvas::OnMouseMove(const FGeometry& Geometry, const FPointerEven
 	if (bPanning)
 	{
 		Pan += Event.GetCursorDelta() / FMath::Max(Geometry.Scale, 0.01f);
+		bKeepFitted = false;
 		return FReply::Handled();
 	}
 	if (!Painter || Painter->GetMapSize().X <= 0)
@@ -782,6 +1112,7 @@ FReply SOnyxMapCanvas::OnMouseWheel(const FGeometry& Geometry, const FPointerEve
 	const FVector2D Local = Geometry.AbsoluteToLocal(Event.GetScreenSpacePosition());
 	const float OldZoom = Zoom;
 	Zoom = FMath::Clamp(Zoom * (Event.GetWheelDelta() > 0.f ? 1.2f : 1.f / 1.2f), MinZoom, MaxZoom);
+	bKeepFitted = false;
 	// Keep the point under the cursor fixed.
 	Pan = Local - (Local - Pan) * (Zoom / OldZoom);
 	return FReply::Handled();

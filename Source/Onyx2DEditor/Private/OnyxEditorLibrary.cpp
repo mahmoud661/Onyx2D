@@ -182,10 +182,12 @@ UTexture2D* UOnyxEditorLibrary::PackFramesIntoStrip(const TArray<UTexture2D*>& F
 }
 
 UBlueprint* UOnyxEditorLibrary::CreateCharacterFromStrips(const TMap<FName, UTexture2D*>& Strips, const FString& Name, const FString& Folder, FIntPoint FrameSize,
-	int32 Behaviours, uint8 Team, float CentimetersPerPixel, const TMap<FName, float>& FramesPerSecond)
+	int32 Behaviours, uint8 Team, float CentimetersPerPixel, const TMap<FName, float>& FramesPerSecond, int32 FeetRowsFromBottom, bool bFitToBody)
 {
-	const FOnyxCharacterBuildResult Result = FOnyxCharacterBuilder::Build(
-		FOnyxCharacterSpec::FromStrips(Strips, Name, Folder, FrameSize, Behaviours, Team, CentimetersPerPixel, FramesPerSecond));
+	FOnyxCharacterSpec Spec = FOnyxCharacterSpec::FromStrips(Strips, Name, Folder, FrameSize, Behaviours, Team, CentimetersPerPixel, FramesPerSecond);
+	Spec.FeetRowsFromBottom = FeetRowsFromBottom;
+	Spec.bFitToBody = bFitToBody;
+	const FOnyxCharacterBuildResult Result = FOnyxCharacterBuilder::Build(Spec);
 	for (const FString& Warning : Result.Warnings)
 	{
 		UE_LOG(LogOnyxEditor, Warning, TEXT("%s"), *Warning);
@@ -227,6 +229,22 @@ void UOnyxEditorLibrary::SetTileCollision(UPaperTileSet* TileSet, const TArray<i
 	for (const int32 Index : TileIndices)
 	{
 		FOnyxTileCollision::Set(TileSet, Index, Collision);
+	}
+	TileSet->PostEditChange();
+	TileSet->MarkPackageDirty();
+	FOnyxAssetUtils::SavePackages({ TileSet->GetPackage() });
+}
+
+void UOnyxEditorLibrary::SetTileEdges(UPaperTileSet* TileSet, const TArray<int32>& TileIndices, uint8 Edges)
+{
+	if (!TileSet)
+	{
+		return;
+	}
+	TileSet->Modify();
+	for (const int32 Index : TileIndices)
+	{
+		FOnyxTileCollision::SetEdges(TileSet, Index, Edges);
 	}
 	TileSet->PostEditChange();
 	TileSet->MarkPackageDirty();

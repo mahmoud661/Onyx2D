@@ -3,6 +3,7 @@
 #include "World/OnyxWater.h"
 #include "Audio/OnyxAudioSubsystem.h"
 #include "Components/BoxComponent.h"
+#include "Core/Onyx2DLibrary.h"
 #include "Core/Onyx2DSettings.h"
 #include "Core/Onyx2DTypes.h"
 #include "Engine/OverlapResult.h"
@@ -30,6 +31,10 @@ namespace
 	constexpr int32 MaxDroplets = 400;
 	constexpr int32 MaxBubbles = 300;
 	constexpr int32 MaxEffects = 400;
+	/** From above, the water lies on the ground: in front of the tiles, behind everything standing on it (the draw order). */
+	constexpr float AboveMeshDepth = -11.f;
+	/** From above, the mesh is a grid of this many cm, so the distance to a rounded shore follows the corners. */
+	constexpr float AboveCell = 16.f;
 }
 
 AOnyxWater::AOnyxWater()
@@ -89,6 +94,126 @@ bool AOnyxWater::IsUnderwater(const FVector& Location) const
 	return FMath::Abs(Location.X - Origin.X) <= Size.X * 0.5f && Location.Z <= GetSurfaceHeightAt(Location.X) && Location.Z >= Origin.Z - Size.Y;
 }
 
+bool AOnyxWater::IsSeenFromAbove() const
+{
+	return UOnyx2DLibrary::IsTopDown(this);
+}
+
+float AOnyxWater::GetDepthFromAbove(const FVector& Location) const
+{
+	// A rounded rectangle on the ground: how far in from its edge (its signed distance, turned round).
+	const FVector Origin = GetActorLocation();
+	const FVector2D Half(Size.X * 0.5f, Size.Y * 0.5f);
+	const float Radius = FMath::Clamp(CornerRadius, 0.f, FMath::Min(Half.X, Half.Y));
+	const FVector2D Local(FMath::Abs(Location.X - Origin.X), FMath::Abs(Location.Z - (Origin.Z - Half.Y)));
+	const FVector2D Q = Local - Half + FVector2D(Radius, Radius);
+	const float Outside = FVector2D(FMath::Max(Q.X, 0.f), FMath::Max(Q.Y, 0.f)).Size();
+	const float Inside = FMath::Min(FMath::Max(Q.X, Q.Y), 0.f);
+	return Radius - Outside - Inside;
+}
+
+void AOnyxWater::SetLevel(float SurfaceZ, float Speed)
+{
+	TargetLevel = FMath::Max(SurfaceZ, GetBottomZ() + 1.f);
+	LevelSpeed = FMath::Max(Speed, 0.f);
+	if (LevelSpeed <= 0.f)
+	{
+		ChangeLevel(TargetLevel - GetSurfaceZ());
+	}
+}
+
+void AOnyxWater::ChangeLevel(float Delta)
+{
+	// The bottom stays: the surface (the actor) moves and the depth with it.
+	Delta = FMath::Max(Delta, 1.f - Size.Y);
+	if (FMath::IsNearlyZero(Delta))
+	{
+		return;
+	}
+	Size.Y += Delta;
+	AddActorWorldOffset(FVector(0.f, 0.f, Delta));
+	UpdateArea();
+}
+
+void AOnyxWater::Widen(float Amount)
+{
+	if (FMath::IsNearlyZero(Amount))
+	{
+		return;
+	}
+	// Grows (or shrinks) on one side: the middle moves half as far that way.
+	const float Grow = FMath::Max(Size.X + FMath::Abs(Amount), 10.f) - Size.X;
+	Size.X += Grow;
+	AddActorWorldOffset(FVector(FMath::Sign(Amount) * Grow * 0.5f, 0.f, 0.f));
+	ResetSurface();
+	BuiltColumns = 0;
+	UpdateArea();
+}
+
+void AOnyxWater::UpdateArea()
+{
+	if (bBuiltFromAbove)
+	{
+		Area->SetBoxExtent(FVector(Size.X * 0.5f, 60.f, Size.Y * 0.5f));
+		Area->SetRelativeLocation(FVector(0.f, 0.f, -Size.Y * 0.5f));
+		return;
+	}
+	Area->SetBoxExtent(FVector(Size.X * 0.5f, 60.f, (Size.Y + AreaAboveSurface) * 0.5f));
+	Area->SetRelativeLocation(FVector(0.f, 0.f, (AreaAboveSurface - Size.Y) * 0.5f));
+}
+
+void AOnyxWater::UpdateLevel(float DeltaSeconds)
+{
+	if (LevelSpeed <= 0.f)
+	{
+		return;
+	}
+	const float Gap = TargetLevel - GetSurfaceZ();
+	const float Step = FMath::Sign(Gap) * FMath::Min(FMath::Abs(Gap), LevelSpeed * DeltaSeconds);
+	ChangeLevel(Step);
+	if (FMath::Abs(TargetLevel - GetSurfaceZ()) < 0.5f)
+	{
+		LevelSpeed = 0.f;
+	}
+}
+
+void AOnyxWater::UpdateFlowLines(float DeltaSeconds)
+{
+	const float Strength = Current.Size();
+	if (FlowLines <= 0.f || Strength < 20.f || Size.Y < 8.f)
+	{
+		return;
+	}
+	// How many a second: more for a wider, faster river.
+	const FVector2D Direction = Current.GetSafeNormal();
+	const float Drift = FMath::Clamp(Strength * 0.55f, 60.f, 520.f);
+	FlowLineDebt += DeltaSeconds * FlowLines * Size.X / 100.f * FMath::Clamp(Strength / 300.f, 0.4f, 2.f) * 1.6f;
+	const FVector Origin = GetActorLocation();
+	while (FlowLineDebt >= 1.f)
+	{
+		FlowLineDebt -= 1.f;
+		const float X = Origin.X + FMath::FRandRange(-0.5f, 0.5f) * Size.X;
+		if (FMath::FRand() < 0.35f)
+		{
+			// A fleck of foam carried along the top.
+			const float Fleck = FMath::FRandRange(4.f, 8.f);
+			if (FEffect* Foam = AddEffect(EEffectKind::Foam, FVector2D(X, GetSurfaceHeightAt(X)), FMath::FRandRange(1.2f, 2.2f), Fleck, Fleck * 1.4f, FoamColor.A * 0.7f))
+			{
+				Foam->Velocity = Direction * Drift;
+			}
+			continue;
+		}
+		// A streak under the surface, thicker near the top where the water runs fastest.
+		const float Depth = FMath::Square(FMath::FRand()) * FMath::Min(Size.Y - 6.f, 220.f) + 6.f;
+		if (FEffect* Streak = AddEffect(EEffectKind::Streak, FVector2D(X, GetSurfaceZ() - Depth), FMath::FRandRange(0.6f, 1.1f), 1.6f, 1.6f, 0.35f))
+		{
+			Streak->Direction = Direction;
+			Streak->Length = FMath::FRandRange(18.f, 42.f);
+			Streak->Velocity = Direction * Drift * FMath::Lerp(1.f, 0.6f, Depth / FMath::Max(Size.Y, 1.f));
+		}
+	}
+}
+
 FVector2D AOnyxWater::GetCurrentAt(const FVector& Location) const
 {
 	if (CurrentVariation <= 0.f)
@@ -144,6 +269,10 @@ void AOnyxWater::ThrowDroplets(float WorldX, float Speed, int32 Count)
 
 void AOnyxWater::EmitBubbles(const FVector& Location, int32 Count, float Spread)
 {
+	if (bBuiltFromAbove)
+	{
+		return; // from above nothing is under the surface to see
+	}
 	const FVector Origin = GetActorLocation();
 	for (int32 Index = 0; Index < Count && Bubbles.Num() < MaxBubbles; ++Index)
 	{
@@ -248,7 +377,8 @@ void AOnyxWater::UpdateEffects(float DeltaSeconds)
 {
 	const float HalfWidth = Size.X * 0.5f;
 	const float CenterX = GetActorLocation().X;
-	const float Slowing = FMath::Exp(-2.5f * DeltaSeconds); // the water soon stops everything it carries
+	const float Slowing = FMath::Exp(-2.5f * DeltaSeconds); // the water soon stops everything it carries...
+	const float Carried = FMath::Exp(-0.15f * DeltaSeconds); // ...except what its current carries along
 	for (int32 Index = Effects.Num() - 1; Index >= 0; --Index)
 	{
 		FEffect& Effect = Effects[Index];
@@ -258,10 +388,12 @@ void AOnyxWater::UpdateEffects(float DeltaSeconds)
 			Effects.RemoveAtSwap(Index);
 			continue;
 		}
-		Effect.Velocity *= Slowing;
+		const bool bCarried = !Current.IsNearlyZero() && FVector2D::DotProduct(Effect.Velocity, Current) > 0.f && FlowLines > 0.f
+			&& (Effect.Kind == EEffectKind::Streak || Effect.Kind == EEffectKind::Foam);
+		Effect.Velocity *= bCarried ? Carried : Slowing;
 		Effect.Position += Effect.Velocity * DeltaSeconds;
 		Effect.Position.X = FMath::Clamp(Effect.Position.X, CenterX - HalfWidth, CenterX + HalfWidth);
-		if (Effect.Kind == EEffectKind::Foam)
+		if (Effect.Kind == EEffectKind::Foam && !bBuiltFromAbove)
 		{
 			Effect.Position.Y = GetSurfaceHeightAt(Effect.Position.X); // rides the waves
 		}
@@ -350,10 +482,17 @@ void AOnyxWater::UpdateDroplets(float DeltaSeconds)
 	for (int32 Index = Droplets.Num() - 1; Index >= 0; --Index)
 	{
 		FDroplet& Drop = Droplets[Index];
-		Drop.Velocity.Y += Gravity * DeltaSeconds;
+		if (bBuiltFromAbove)
+		{
+			Drop.Velocity *= FMath::Exp(-4.f * DeltaSeconds); // thrown out across the water, slowing, fading
+		}
+		else
+		{
+			Drop.Velocity.Y += Gravity * DeltaSeconds;
+		}
 		Drop.Position += Drop.Velocity * DeltaSeconds;
 		Drop.Age += DeltaSeconds;
-		const bool bBackIn = Drop.Velocity.Y < 0.f && Drop.Position.Y < GetSurfaceHeightAt(Drop.Position.X);
+		const bool bBackIn = !bBuiltFromAbove && Drop.Velocity.Y < 0.f && Drop.Position.Y < GetSurfaceHeightAt(Drop.Position.X);
 		if (bBackIn)
 		{
 			Splash(Drop.Position.X, Drop.Radius * 2.f, 12.f); // a tiny ring where it lands
@@ -389,7 +528,7 @@ void AOnyxWater::EnsureMaterials()
 void AOnyxWater::UpdateMesh()
 {
 	const int32 Count = Heights.Num();
-	if (Count < 2)
+	if (Count < 2 || bBuiltFromAbove)
 	{
 		return;
 	}
@@ -415,6 +554,7 @@ void AOnyxWater::UpdateMesh()
 	if (BuiltColumns == Count && WaterMesh->GetNumSections() > 0)
 	{
 		WaterMesh->UpdateMeshSection_LinearColor(0, Vertices, {}, UVs, {}, {});
+		WaterMesh->SetMeshSectionVisible(0, bDrawWater);
 		return;
 	}
 	TArray<int32> Triangles;
@@ -428,6 +568,7 @@ void AOnyxWater::UpdateMesh()
 	WaterMesh->CreateMeshSection_LinearColor(0, Vertices, Triangles, {}, UVs, {}, {}, false);
 	EnsureMaterials();
 	WaterMesh->SetMaterial(0, WaterMaterial);
+	WaterMesh->SetMeshSectionVisible(0, bDrawWater);
 	BuiltColumns = Count;
 }
 
@@ -453,10 +594,11 @@ void AOnyxWater::UpdateParticleMesh()
 	Colors.Reserve(Count * 4);
 	Triangles.Reserve(Count * 6);
 	const FVector Origin = GetActorLocation();
+	const float Depth = (bBuiltFromAbove ? AboveMeshDepth : WaterMeshDepth) + 1.f;
 	auto AddQuad = [&](const FVector2D& Position, const FVector2D& Along, const FVector2D& Across, const FLinearColor& Color, float Kind, float Seed = 0.f)
 	{
 		const int32 First = Vertices.Num();
-		const FVector Center(Position.X - Origin.X, WaterMeshDepth + 1.f, Position.Y - Origin.Z);
+		const FVector Center(Position.X - Origin.X, Depth, Position.Y - Origin.Z);
 		const FVector A(Along.X, 0.f, Along.Y);
 		const FVector B(Across.X, 0.f, Across.Y);
 		Vertices.Append({ Center - A - B, Center - A + B, Center + A - B, Center + A + B });
@@ -511,9 +653,10 @@ void AOnyxWater::UpdateParticleMesh()
 			Fade = FadeIn * FMath::Clamp((1.f - T) / 0.6f, 0.f, 1.f);
 			break;
 		}
-		// Rings stay in the water: their seed is where the surface cuts across them (0 = top of the quad, 1 = bottom).
+		// Rings stay in the water: their seed is where the surface cuts across them (0 = top of the quad, 1 = bottom); from
+		// above the whole ring lies on the water.
 		const float Seed = Effect.Kind == EEffectKind::Ring
-			? FMath::Clamp(0.5f - (GetSurfaceHeightAt(Effect.Position.X) - Effect.Position.Y) / (2.f * FMath::Max(Radius, 1.f)), 0.f, 1.f)
+			? (bBuiltFromAbove ? 0.f : FMath::Clamp(0.5f - (GetSurfaceHeightAt(Effect.Position.X) - Effect.Position.Y) / (2.f * FMath::Max(Radius, 1.f)), 0.f, 1.f))
 			: Effect.Seed;
 		AddQuad(Effect.Position, Along, Across, Color.CopyWithNewOpacity(Effect.Alpha * Fade), float(uint8(Effect.Kind)), Seed);
 	}
@@ -541,7 +684,7 @@ void AOnyxWater::UpdateLook()
 		WaterMaterial->SetVectorParameterValue(TEXT("ShallowColor"), ShallowColor);
 		WaterMaterial->SetVectorParameterValue(TEXT("DeepColor"), DeepColor);
 		WaterMaterial->SetVectorParameterValue(TEXT("SurfaceColor"), SurfaceColor);
-		WaterMaterial->SetScalarParameterValue(TEXT("Depth"), Size.Y);
+		WaterMaterial->SetScalarParameterValue(TEXT("Depth"), bBuiltFromAbove ? DeepFromShore : Size.Y);
 		WaterMaterial->SetScalarParameterValue(TEXT("Thickness"), SurfaceThickness);
 		WaterMaterial->SetScalarParameterValue(TEXT("Caustics"), Caustics);
 		WaterMaterial->SetScalarParameterValue(TEXT("Bubbles"), bBubbles ? 1.f : 0.f);
@@ -555,25 +698,81 @@ void AOnyxWater::UpdateLook()
 
 // Lifecycle --------------------------------------------------------------------------------------------------------------
 
+void AOnyxWater::BuildShape()
+{
+	bBuiltFromAbove = IsSeenFromAbove();
+	if (bBuiltFromAbove)
+	{
+		// From above the box is the pond on the ground, from its top edge (the actor's location) down.
+		Area->SetBoxExtent(FVector(Size.X * 0.5f, 60.f, Size.Y * 0.5f));
+		Area->SetRelativeLocation(FVector(0.f, 0.f, -Size.Y * 0.5f));
+		Droplets.Reset();
+		Bubbles.Reset();
+		UpdateMeshFromAbove();
+	}
+	else
+	{
+		// The box hangs from the surface (the actor's location) down to the bottom, plus a margin above.
+		Area->SetBoxExtent(FVector(Size.X * 0.5f, 60.f, (Size.Y + AreaAboveSurface) * 0.5f));
+		Area->SetRelativeLocation(FVector(0.f, 0.f, (AreaAboveSurface - Size.Y) * 0.5f));
+		ResetSurface();
+		BuiltColumns = 0;
+		UpdateMesh();
+	}
+	UpdateLook();
+}
+
+void AOnyxWater::UpdateMeshFromAbove()
+{
+	// A grid over the box; UV0 = world X and Z in metres (caustics), UV1 = cm in from the shore and 1 (seen from above).
+	const int32 Columns = FMath::Clamp(FMath::CeilToInt(Size.X / AboveCell), 2, 160);
+	const int32 Rows = FMath::Clamp(FMath::CeilToInt(Size.Y / AboveCell), 2, 160);
+	const FVector Origin = GetActorLocation();
+	TArray<FVector> Vertices;
+	TArray<FVector2D> UVs;
+	TArray<FVector2D> Shore;
+	TArray<int32> Triangles;
+	Vertices.Reserve((Columns + 1) * (Rows + 1));
+	UVs.Reserve((Columns + 1) * (Rows + 1));
+	Shore.Reserve((Columns + 1) * (Rows + 1));
+	Triangles.Reserve(Columns * Rows * 6);
+	for (int32 Row = 0; Row <= Rows; ++Row)
+	{
+		for (int32 Column = 0; Column <= Columns; ++Column)
+		{
+			const float X = -Size.X * 0.5f + Size.X * Column / Columns;
+			const float Z = -Size.Y * Row / Rows;
+			Vertices.Add(FVector(X, AboveMeshDepth, Z));
+			UVs.Add(FVector2D((Origin.X + X) / 100.f, (Origin.Z + Z) / 100.f));
+			Shore.Add(FVector2D(GetDepthFromAbove(Origin + FVector(X, 0.f, Z)), 1.f));
+		}
+	}
+	for (int32 Row = 0; Row < Rows; ++Row)
+	{
+		for (int32 Column = 0; Column < Columns; ++Column)
+		{
+			const int32 TopLeft = Row * (Columns + 1) + Column;
+			const int32 BottomLeft = TopLeft + Columns + 1;
+			Triangles.Append({ TopLeft, TopLeft + 1, BottomLeft, TopLeft + 1, BottomLeft + 1, BottomLeft });
+		}
+	}
+	WaterMesh->ClearAllMeshSections();
+	WaterMesh->CreateMeshSection_LinearColor(0, Vertices, Triangles, {}, UVs, Shore, {}, {}, {}, {}, false);
+	EnsureMaterials();
+	WaterMesh->SetMaterial(0, WaterMaterial);
+	BuiltColumns = 0;
+}
+
 void AOnyxWater::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
-	// The box hangs from the surface (the actor's location) down to the bottom, plus a margin above.
-	Area->SetBoxExtent(FVector(Size.X * 0.5f, 60.f, (Size.Y + AreaAboveSurface) * 0.5f));
-	Area->SetRelativeLocation(FVector(0.f, 0.f, (AreaAboveSurface - Size.Y) * 0.5f));
-	ResetSurface();
-	BuiltColumns = 0;
-	UpdateMesh();
-	UpdateLook();
+	BuildShape();
 }
 
 void AOnyxWater::BeginPlay()
 {
 	Super::BeginPlay();
-	ResetSurface();
-	BuiltColumns = 0;
-	UpdateMesh();
-	UpdateLook();
+	BuildShape();
 }
 
 void AOnyxWater::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -593,6 +792,23 @@ void AOnyxWater::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	WaveTime += DeltaSeconds;
+	if (bBuiltFromAbove != IsSeenFromAbove())
+	{
+		BuildShape(); // the level's game style changed
+	}
+	if (bBuiltFromAbove)
+	{
+		const UWorld* World = GetWorld();
+		if (World && World->IsGameWorld())
+		{
+			AffectFromAbove(DeltaSeconds);
+		}
+		UpdateDroplets(DeltaSeconds);
+		UpdateEffects(DeltaSeconds);
+		UpdateParticleMesh();
+		UpdateLook();
+		return;
+	}
 	if (Heights.Num() != FMath::Clamp(FMath::CeilToInt(Size.X / FMath::Max(WaveResolution, 2.f)) + 1, 2, 4096))
 	{
 		ResetSurface();
@@ -600,7 +816,9 @@ void AOnyxWater::Tick(float DeltaSeconds)
 	const UWorld* World = GetWorld();
 	if (World && World->IsGameWorld())
 	{
+		UpdateLevel(DeltaSeconds);
 		AffectOverlaps(DeltaSeconds);
+		UpdateFlowLines(DeltaSeconds);
 	}
 	if (bWaves)
 	{
@@ -701,6 +919,138 @@ float AOnyxWater::Float(UPrimitiveComponent* Primitive, float DeltaSeconds)
 		}
 	}
 	return Wetness;
+}
+
+void AOnyxWater::SplashFromAbove(const FVector& Location, float Strength)
+{
+	const float Power = FMath::Clamp(Strength, 0.2f, 1.f);
+	if (bWakes)
+	{
+		EmitRing(Location, 50.f + 70.f * Power, Power);
+		EmitRing(Location, 25.f + 30.f * Power, Power * 0.8f);
+	}
+	// Droplets thrown out across the water round it.
+	const int32 Count = FMath::RoundToInt(SplashDroplets * Power * 0.6f);
+	for (int32 Index = 0; Index < Count && Droplets.Num() < MaxDroplets; ++Index)
+	{
+		FDroplet& Drop = Droplets.AddDefaulted_GetRef();
+		const FVector2D Out = FVector2D(1.f, 0.f).GetRotated(FMath::FRandRange(0.f, 360.f));
+		Drop.Position = FVector2D(Location.X, Location.Z) + Out * FMath::FRandRange(4.f, 14.f);
+		Drop.Velocity = Out * FMath::FRandRange(90.f, 260.f) * Power;
+		Drop.Life = FMath::FRandRange(0.3f, 0.6f);
+		Drop.Radius = FMath::FRandRange(2.f, 4.f);
+	}
+	const FVector Where(Location.X, GetActorLocation().Y + AboveMeshDepth + 2.f, Location.Z);
+	if (SplashEffect)
+	{
+		AOnyxFlipbookEffect::Spawn(this, SplashEffect, Where, 1.f);
+	}
+	if (SplashSound)
+	{
+		UOnyxAudioSubsystem::PlaySoundAt(this, SplashSound, Where, EOnyxSoundCategory::Effects, SplashVolume * FMath::Max(Power, 0.3f), FMath::FRandRange(0.92f, 1.08f));
+	}
+}
+
+void AOnyxWater::AffectFromAbove(float DeltaSeconds)
+{
+	TArray<FOverlapResult> Results;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(OnyxWater), false, this);
+	GetWorld()->OverlapMultiByObjectType(Results, Area->GetComponentLocation(), Area->GetComponentQuat(), FCollisionObjectQueryParams::AllDynamicObjects,
+		FCollisionShape::MakeBox(Area->GetScaledBoxExtent()), Params);
+
+	TSet<TWeakObjectPtr<UOnyxMovementComponent>> StillIn;
+	TSet<TWeakObjectPtr<UPrimitiveComponent>> Seen;
+	TSet<TWeakObjectPtr<UPrimitiveComponent>> InWater;
+	for (const FOverlapResult& Result : Results)
+	{
+		UPrimitiveComponent* Primitive = Result.GetComponent();
+		if (!Primitive || Primitive->GetOwner() == this || Seen.Contains(Primitive))
+		{
+			continue;
+		}
+		Seen.Add(Primitive);
+		// A character is in the water where its feet are (from above its capsule stands on them); it wades, then swims
+		// (its movement component decides which from how far in it is).
+		const ACharacter* Character = Cast<ACharacter>(Primitive->GetOwner());
+		UOnyxMovementComponent* Movement = Character && Primitive == Character->GetRootComponent() ? Cast<UOnyxMovementComponent>(Character->GetCharacterMovement()) : nullptr;
+		FVector Where;
+		FVector Velocity;
+		float Width;
+		if (Movement)
+		{
+			Where = Character->GetActorLocation();
+			if (GetDepthFromAbove(Where) <= 0.f)
+			{
+				continue;
+			}
+			Movement->SetWater(this);
+			StillIn.Add(Movement);
+			Velocity = Movement->Velocity;
+			Width = Primitive->Bounds.BoxExtent.X * 2.f;
+		}
+		else if (Primitive->IsSimulatingPhysics())
+		{
+			Where = Primitive->Bounds.Origin;
+			if (GetDepthFromAbove(Where) <= 0.f)
+			{
+				continue;
+			}
+			// Floating: slowed by the water, carried by its current, turning less.
+			Velocity = Primitive->GetPhysicsLinearVelocity();
+			Primitive->AddForce(-FVector(Velocity.X, 0.f, Velocity.Z) * Drag * Primitive->GetMass());
+			const FVector2D Flow = GetCurrentAt(Where);
+			Primitive->AddForce(FVector(Flow.X, 0.f, Flow.Y), NAME_None, true);
+			Primitive->SetPhysicsAngularVelocityInRadians(Primitive->GetPhysicsAngularVelocityInRadians() * FMath::Exp(-SpinDrag * DeltaSeconds));
+			Width = Primitive->Bounds.BoxExtent.X * 2.f;
+		}
+		else
+		{
+			continue;
+		}
+		InWater.Add(Primitive);
+		const float Speed = FVector2D(Velocity.X, Velocity.Z).Size();
+		// Going in: a splash.
+		if (!LastCenters.Contains(Primitive))
+		{
+			SplashFromAbove(Where, FMath::Max(Speed / 400.f, 0.35f));
+		}
+		LastCenters.Add(Primitive, 1.f);
+		// Ripples spreading round it: often while it moves, now and then while it keeps still.
+		if (bWakes && WakeAmount > 0.f)
+		{
+			float& Timer = RippleTimers.FindOrAdd(Primitive, FMath::FRandRange(0.f, 0.3f));
+			Timer -= DeltaSeconds;
+			if (Timer <= 0.f)
+			{
+				const bool bMoving = Speed > 40.f;
+				EmitRing(Where, Width * (bMoving ? 1.3f : 1.f) + 18.f, bMoving ? 0.7f : 0.35f);
+				Timer = (bMoving ? FMath::Clamp(0.36f - Speed / 1500.f, 0.12f, 0.36f) : FMath::FRandRange(0.9f, 1.4f)) / WakeAmount;
+			}
+		}
+	}
+	// Characters that left the water.
+	for (const TWeakObjectPtr<UOnyxMovementComponent>& Swimmer : Swimmers)
+	{
+		if (UOnyxMovementComponent* Movement = Swimmer.Get(); Movement && !StillIn.Contains(Swimmer))
+		{
+			Movement->ClearWater(this);
+		}
+	}
+	Swimmers = MoveTemp(StillIn);
+	for (auto It = LastCenters.CreateIterator(); It; ++It)
+	{
+		if (!It->Key.IsValid() || !InWater.Contains(It->Key))
+		{
+			It.RemoveCurrent();
+		}
+	}
+	for (auto It = RippleTimers.CreateIterator(); It; ++It)
+	{
+		if (!It->Key.IsValid() || !InWater.Contains(It->Key))
+		{
+			It.RemoveCurrent();
+		}
+	}
 }
 
 void AOnyxWater::AffectOverlaps(float DeltaSeconds)

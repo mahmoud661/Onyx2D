@@ -10,6 +10,87 @@ UOnyxClip* UOnyxMoveset::FindClip(FName Role) const
 	return Found ? Found->Get() : nullptr;
 }
 
+FName UOnyxMoveset::MakeDirectionalRole(FName Role, EOnyxDirection Direction)
+{
+	const TCHAR* Suffix = nullptr;
+	switch (Direction)
+	{
+	case EOnyxDirection::Down:     Suffix = TEXT("Down"); break;
+	case EOnyxDirection::DownSide: Suffix = TEXT("DownSide"); break;
+	case EOnyxDirection::Side:     Suffix = TEXT("Side"); break;
+	case EOnyxDirection::UpSide:   Suffix = TEXT("UpSide"); break;
+	case EOnyxDirection::Up:       Suffix = TEXT("Up"); break;
+	default:                       return Role;
+	}
+	return FName(*FString::Printf(TEXT("%s_%s"), *Role.ToString(), Suffix));
+}
+
+FName UOnyxMoveset::GetBaseRole(FName Role, EOnyxDirection* OutDirection)
+{
+	const FString Name = Role.ToString();
+	// Longest first: DownSide before Side.
+	const TPair<const TCHAR*, EOnyxDirection> Suffixes[] = { { TEXT("_DownSide"), EOnyxDirection::DownSide }, { TEXT("_UpSide"), EOnyxDirection::UpSide },
+		{ TEXT("_Down"), EOnyxDirection::Down }, { TEXT("_Side"), EOnyxDirection::Side }, { TEXT("_Up"), EOnyxDirection::Up } };
+	for (const TPair<const TCHAR*, EOnyxDirection>& Suffix : Suffixes)
+	{
+		if (Name.EndsWith(Suffix.Key) && Name.Len() > FCString::Strlen(Suffix.Key))
+		{
+			if (OutDirection)
+			{
+				*OutDirection = Suffix.Value;
+			}
+			return FName(*Name.LeftChop(FCString::Strlen(Suffix.Key)));
+		}
+	}
+	if (OutDirection)
+	{
+		*OutDirection = EOnyxDirection::None;
+	}
+	return Role;
+}
+
+UOnyxClip* UOnyxMoveset::FindClip(FName Role, EOnyxDirection Direction, EOnyxDirection* OutShown) const
+{
+	// The direction itself, then the nearest drawn: a diagonal shows the side, then its up or down; up and down show
+	// the plain role (drawn from the side) before the side.
+	EOnyxDirection Order[4] = { Direction, EOnyxDirection::None, EOnyxDirection::None, EOnyxDirection::None };
+	int32 Count = 1;
+	switch (Direction)
+	{
+	case EOnyxDirection::DownSide: Order[1] = EOnyxDirection::Side; Order[2] = EOnyxDirection::Down; Count = 4; break;
+	case EOnyxDirection::UpSide:   Order[1] = EOnyxDirection::Side; Order[2] = EOnyxDirection::Up; Count = 4; break;
+	case EOnyxDirection::Down:
+	case EOnyxDirection::Up:       Order[2] = EOnyxDirection::Side; Count = 3; break;
+	case EOnyxDirection::Side:     Count = 2; break;
+	default:                       break;
+	}
+	for (int32 Index = 0; Index < Count; ++Index)
+	{
+		if (UOnyxClip* Clip = FindClip(MakeDirectionalRole(Role, Order[Index])))
+		{
+			if (OutShown)
+			{
+				*OutShown = Order[Index];
+			}
+			return Clip;
+		}
+	}
+	return nullptr;
+}
+
+bool UOnyxMoveset::HasDiagonals() const
+{
+	for (const TPair<FName, TObjectPtr<UOnyxClip>>& Pair : Clips)
+	{
+		const FString Role = Pair.Key.ToString();
+		if (Role.EndsWith(TEXT("_DownSide")) || Role.EndsWith(TEXT("_UpSide")))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 FName UOnyxMoveset::FindRole(const UOnyxClip* Clip) const
 {
 	for (const TPair<FName, TObjectPtr<UOnyxClip>>& Pair : Clips)

@@ -76,3 +76,32 @@ void UOnyxScoreSubsystem::ResetAll()
 		SetItemCount(Item, 0);
 	}
 }
+
+void UOnyxScoreSubsystem::Initialize(FSubsystemCollectionBase& Collection)
+{
+	Super::Initialize(Collection);
+	if (UOnyxSaveSubsystem* Save = Collection.InitializeDependency<UOnyxSaveSubsystem>())
+	{
+		Save->Register(this);
+	}
+}
+
+void UOnyxScoreSubsystem::Deinitialize()
+{
+	if (UOnyxSaveSubsystem* Save = GetGameInstance()->GetSubsystem<UOnyxSaveSubsystem>())
+	{
+		Save->Unregister(this);
+	}
+	Super::Deinitialize();
+}
+
+void UOnyxScoreSubsystem::WriteSave(FArchive& Archive)
+{
+	Archive << Coins << Items;
+}
+
+void UOnyxScoreSubsystem::ReadSave(FArchive& Archive)
+{
+	Archive << Coins << Items;
+	OnCoinsChanged.Broadcast(Coins);
+}

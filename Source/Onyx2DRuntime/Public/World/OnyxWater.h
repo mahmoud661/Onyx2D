@@ -25,6 +25,11 @@ class USoundBase;
  *    anything goes in or comes out; optional splash effect and sound.
  *  - Look: smooth shader water: depth gradient, drifting caustics and light shafts, rising bubbles, a crisp surface line,
  *    anti-aliased edge; darkened by the lighting mood.
+ *
+ * In a Top Down level the same box is a pond or a pool seen from above (its corners rounded by Corner Radius): shallow
+ * along the shore, deeper towards the middle, caustics and glints all over, foam where it meets the land. Characters wade
+ * in the shallows (slower) and swim beyond them; ripples spread round whatever moves in it; floating objects drift with
+ * the current, slowed by the water.
  */
 UCLASS(meta = (DisplayName = "Onyx Water"))
 class ONYX2DRUNTIME_API AOnyxWater : public AActor
@@ -132,6 +137,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|Look")
 	bool bBubbles = true;
 
+	/** Draws its water. Off: only its splashes, bubbles and wakes show (a swimming volume for water something else draws). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|Look")
+	bool bDrawWater = true;
+
 	/** Darkens with the scene's lighting mood (night, caves) like the rest of the level. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|Look")
 	bool bFollowLighting = true;
@@ -172,15 +181,56 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|Effects")
 	FLinearColor FoamColor = FLinearColor(0.93f, 0.98f, 1.f, 0.8f);
 
+	/** With a current: streaks drifting with it under the surface and flecks of foam along the top, so it is seen to run (0: none). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|Effects", meta = (ClampMin = "0", UIMax = "3"))
+	float FlowLines = 1.f;
+
 	/** Sand stirred up from the bottom. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|Effects")
 	FLinearColor SiltColor = FLinearColor(0.62f, 0.52f, 0.38f, 0.5f);
+
+	// --- Seen from above (Top Down levels) ----------------------------------------------------
+
+	/** From above: its corners rounded this much, cm (a pond rather than a pool; half the shorter side: a long oval). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|From Above", meta = (ClampMin = "0", Units = "cm"))
+	float CornerRadius = 0.f;
+
+	/** From above: the shallows along the shore, cm in from it: characters wade there (slower) and swim beyond. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|From Above", meta = (ClampMin = "0", Units = "cm"))
+	float ShoreWidth = 48.f;
+
+	/** From above: how far in from the shore the water is at its deepest colour, cm. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Water|From Above", meta = (ClampMin = "1", Units = "cm"))
+	float DeepFromShore = 180.f;
 
 	// --- Queries ----------------------------------------------------------------------------
 
 	/** Height of the calm surface (world Z). */
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Water")
 	float GetSurfaceZ() const;
+
+	/** Height of the bottom (world Z). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Water")
+	float GetBottomZ() const { return GetSurfaceZ() - Size.Y; }
+
+	/**
+	 * Raises or lowers the surface to world height SurfaceZ at Speed cm/s, the bottom staying where it is: a basin filling,
+	 * a pool draining. Swimmers and floating objects rise and sink with it.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Water")
+	void SetLevel(float SurfaceZ, float Speed = 60.f);
+
+	/** Moves the surface by Delta cm at once (the bottom stays; never below it). */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Water")
+	void ChangeLevel(float Delta);
+
+	/** The surface is on its way to a level set by Set Level. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Water")
+	bool IsChangingLevel() const { return LevelSpeed > 0.f; }
+
+	/** Widens the water by Amount cm on its left (negative) or right (positive) side, the other side staying put. */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Water")
+	void Widen(float Amount);
 
 	/** Height of the surface at a world X, waves included. */
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Water")
@@ -216,6 +266,14 @@ public:
 	/** A cloud of sand stirred up from the bottom at Location. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Water")
 	void EmitSilt(const FVector& Location, float Strength = 1.f);
+
+	/** The water is seen from above: its level plays the Top Down game style. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Water")
+	bool IsSeenFromAbove() const;
+
+	/** From above: how far in from the shore a place is, cm (below 0: on land). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Water")
+	float GetDepthFromAbove(const FVector& Location) const;
 
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -274,6 +332,12 @@ private:
 	};
 
 	void ResetSurface();
+	/** The area box from the size (the surface left as it is). */
+	void UpdateArea();
+	/** Towards the level Set Level asked for. */
+	void UpdateLevel(float DeltaSeconds);
+	/** Streaks and foam drifting with the current. */
+	void UpdateFlowLines(float DeltaSeconds);
 	void SimulateWaves(float DeltaSeconds);
 	void UpdateDroplets(float DeltaSeconds);
 	void UpdateBubbles(float DeltaSeconds);
@@ -293,6 +357,18 @@ private:
 	void CrossedSurface(float WorldX, float Speed, float Width, bool bEntering);
 	float GetLocalX(float WorldX) const;
 	float GetRippleAt(float LocalX) const;
+	/** The area and the mesh for how the water is seen now (from the side, or from above). */
+	void BuildShape();
+	/** From above: the pond as a flat mesh, each point knowing how far in from the shore it is. */
+	void UpdateMeshFromAbove();
+	/** From above: who wades or swims, ripples round what moves, floating objects drifting. */
+	void AffectFromAbove(float DeltaSeconds);
+	/** From above: a splash where something went in (rings and droplets thrown out across the water). */
+	void SplashFromAbove(const FVector& Location, float Strength);
+	/** Seen from above when it was last built (the mesh and the area follow it). */
+	bool bBuiltFromAbove = false;
+	/** From above: seconds until the next ripple round each thing moving in the water. */
+	TMap<TWeakObjectPtr<UPrimitiveComponent>, float> RippleTimers;
 
 	/** Surface points: offset from the calm surface and its speed. */
 	TArray<float> Heights;
@@ -301,6 +377,9 @@ private:
 	TArray<FBubble> Bubbles;
 	TArray<FEffect> Effects;
 	float WaveTime = 0.f;
+	float TargetLevel = 0.f;
+	float LevelSpeed = 0.f;
+	float FlowLineDebt = 0.f;
 	float StepRemainder = 0.f;
 
 	/** Where each object's centre was last frame (above or below the surface). */

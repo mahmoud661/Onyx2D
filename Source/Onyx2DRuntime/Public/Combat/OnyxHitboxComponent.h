@@ -41,6 +41,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Hitbox")
 	FName DamageType = TEXT("Melee");
 
+	/** A blade meeting this one clashes with it (see the Combat component's Clash). Off for smoke, fire, a body. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Hitbox")
+	bool bClashable = true;
+
 	/** Played where a hit lands. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Hitbox")
 	TObjectPtr<USoundBase> HitSound;
@@ -64,6 +68,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Hitbox")
 	bool IsHitWindowOpen() const { return bWindowOpen; }
+
+	/** Actor is not hit for the rest of this window (its blade met this one: a clash). */
+	void IgnoreThisWindow(AActor* Actor) { HitThisWindow.Add(Actor); }
 
 	/** Optional veto (C++): return false to skip hurting this victim, e.g. because it stomped the owner. */
 	TFunction<bool(AActor* Victim)> ShouldHit;

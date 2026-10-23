@@ -39,8 +39,13 @@ public:
 	/** Union of every contributed area (invalid box when there is none). */
 	FBox GetLevelBounds() const;
 
+	/** The boss whose fight is on, or was last (the HUD shows its name and health). */
+	void SetActiveBoss(class UOnyxBossComponent* Boss);
+	class UOnyxBossComponent* GetActiveBoss() const;
+
 private:
 	TArray<TWeakObjectPtr<UPrimitiveComponent>> OneWaySurfaces;
 	TArray<TWeakObjectPtr<AOnyxCameraBounds>> CameraBounds;
 	TMap<TWeakObjectPtr<const UObject>, FBox> LevelBounds;
+	TWeakObjectPtr<class UOnyxBossComponent> ActiveBoss;
 };

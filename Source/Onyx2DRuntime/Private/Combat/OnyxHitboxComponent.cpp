@@ -6,6 +6,8 @@
 #include "Audio/OnyxAudioSubsystem.h"
 #include "World/OnyxFlipbookEffect.h"
 #include "Combat/OnyxCombatLibrary.h"
+#include "Core/Onyx2DLibrary.h"
+#include "Movement/OnyxMovementComponent.h"
 #include "Feedback/OnyxFeedbackSubsystem.h"
 
 UOnyxHitboxComponent::UOnyxHitboxComponent()
@@ -90,12 +92,22 @@ void UOnyxHitboxComponent::TryHit(AActor* Victim)
 		return; // not recorded: it may hit later in this window
 	}
 
-	const float AwaySign = (Victim->GetActorLocation().X >= GetComponentLocation().X) ? 1.f : -1.f;
-
 	FOnyxDamageInfo Info;
 	Info.Amount = Damage;
 	Info.Instigator = Attacker;
-	Info.Knockback = FVector(AwaySign * Knockback.X, 0.f, Knockback.Y);
+	const UOnyxMovementComponent* Moving = Attacker ? Attacker->FindComponentByClass<UOnyxMovementComponent>() : nullptr;
+	if (Moving ? Moving->IsTopDown() : UOnyx2DLibrary::IsTopDown(this))
+	{
+		// From above: thrown straight away from whoever struck, across the ground (no upward part).
+		const FVector From = Attacker ? Attacker->GetActorLocation() : GetComponentLocation();
+		const FVector Apart = (Victim->GetActorLocation() - From) * FVector(1.f, 0.f, 1.f);
+		Info.Knockback = (Apart.IsNearlyZero() ? GetForwardVector() : Apart.GetSafeNormal()) * Knockback.X;
+	}
+	else
+	{
+		const float AwaySign = (Victim->GetActorLocation().X >= GetComponentLocation().X) ? 1.f : -1.f;
+		Info.Knockback = FVector(AwaySign * Knockback.X, 0.f, Knockback.Y);
+	}
 	Info.DamageType = DamageType;
 
 	HitThisWindow.Add(Victim);
@@ -104,8 +116,9 @@ void UOnyxHitboxComponent::TryHit(AActor* Victim)
 		return;
 	}
 
-	// Where the blow lands: between the hitbox and the victim.
-	const FVector Impact = (GetComponentLocation() + Victim->GetActorLocation()) * 0.5f;
+	// Where the blow lands: the point of the victim's body nearest the weapon (at the weapon's height, not its feet).
+	const USceneComponent* Body = Victim->GetRootComponent();
+	const FVector Impact = Body ? Body->Bounds.GetBox().GetClosestPointTo(GetComponentLocation()) : (GetComponentLocation() + Victim->GetActorLocation()) * 0.5f;
 	UOnyxAudioSubsystem::PlaySoundAt(this, HitSound, Impact, EOnyxSoundCategory::Effects, 1.f, FMath::FRandRange(0.95f, 1.05f));
 	if (HitEffect)
 	{

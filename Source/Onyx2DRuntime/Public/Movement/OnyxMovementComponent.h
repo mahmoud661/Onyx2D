@@ -104,8 +104,101 @@ struct ONYX2DRUNTIME_API FOnyxWallSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wall", meta = (ClampMin = "0"))
 	float ControlLockTime = 0.16f;
 
+	/** A wall jump always rises its full height: letting go of Jump doesn't cut it short (climbing a shaft wall to wall never depends on how long the button is held). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wall")
+	bool bFullHeightWallJump = false;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wall", meta = (ClampMin = "1"))
 	float ProbeDistance = 12.f;
+};
+
+/** Sliding: Down while running drops into a low slide that carries on and slows down (Onyx Movement > Slide). */
+USTRUCT(BlueprintType)
+struct ONYX2DRUNTIME_API FOnyxSlideSettings
+{
+	GENERATED_BODY()
+
+	/** Off by default. Needs Crouch Height Scale below 1 to fit under things. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide")
+	bool bEnabled = false;
+
+	/** Starts only when running at least this fast (fraction of the run speed). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "0", ClampMax = "1", EditCondition = "bEnabled"))
+	float MinSpeedFraction = 0.6f;
+
+	/** Speed at the start, as a fraction of the run speed... */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "0", EditCondition = "bEnabled"))
+	float StartSpeedFraction = 1.35f;
+
+	/** ...and at the end. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "0", EditCondition = "bEnabled"))
+	float EndSpeedFraction = 0.35f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slide", meta = (ClampMin = "0.05", Units = "s", EditCondition = "bEnabled"))
+	float Duration = 0.5f;
+};
+
+/**
+ * Slopes: ramps of slope tiles (Onyx Tile Collision) or any sloped ground. How steep it walks, sliding down wet slopes
+ * (water running down them: whatever calls Apply Surface Flow), and its feet drawn on the slope (Onyx Movement > Slopes).
+ */
+USTRUCT(BlueprintType)
+struct ONYX2DRUNTIME_API FOnyxSlopeSettings
+{
+	GENERATED_BODY()
+
+	/** The steepest ground it walks on, degrees (45 degree ramps need more than 45); steeper ground slides it off. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slopes", meta = (ClampMin = "0", ClampMax = "89", Units = "deg"))
+	float MaxWalkAngle = 50.f;
+
+	/**
+	 * Its feet drawn on the slope right under its middle. The capsule rests on a slope beside its middle, so without this
+	 * the feet float a little above it.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slopes")
+	bool bFeetOnSlope = true;
+
+	/** On a wet slope (Apply Surface Flow with Wet) it slides: how quickly it speeds up down the slope, cm/s². */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slopes", meta = (ClampMin = "0"))
+	float WetSlideAcceleration = 2400.f;
+
+	/** The fastest it slides, cm/s (sideways; along a 45 degree slope that is 1.4 times as far). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slopes", meta = (ClampMin = "0"))
+	float MaxSlideSpeed = 900.f;
+
+	/** How much it can steer while sliding (0: not at all, 1: as on dry ground). Below about 0.5 it can't climb back up. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slopes", meta = (ClampMin = "0", ClampMax = "1"))
+	float SlideSteering = 0.25f;
+
+	/** Dry ground at least this steep slides it too, degrees (0: only wet slopes do). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Slopes", meta = (ClampMin = "0", ClampMax = "89", Units = "deg"))
+	float DrySlideAngle = 0.f;
+};
+
+/**
+ * Ledges: falling past the top of a wall while holding towards it, the character catches the edge and hangs. Jump or Up
+ * climbs onto it, Down or away lets go (Onyx Movement > Ledge).
+ */
+USTRUCT(BlueprintType)
+struct ONYX2DRUNTIME_API FOnyxLedgeSettings
+{
+	GENERATED_BODY()
+
+	/** Off by default. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge")
+	bool bEnabled = false;
+
+	/** How far above or below the top of the head an edge can be and still be caught, cm. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge", meta = (ClampMin = "1", EditCondition = "bEnabled"))
+	float GrabReach = 28.f;
+
+	/** While hanging, the top of the head is this far under the edge, cm (hands over it). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge", meta = (EditCondition = "bEnabled"))
+	float HangDepth = 8.f;
+
+	/** How long pulling up takes. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ledge", meta = (ClampMin = "0.05", Units = "s", EditCondition = "bEnabled"))
+	float ClimbTime = 0.4f;
 };
 
 /**
@@ -117,9 +210,13 @@ struct ONYX2DRUNTIME_API FOnyxSwimSettings
 {
 	GENERATED_BODY()
 
-	/** Off: the character ignores water (walks along the bottom, like a heavy knight). */
+	/** Off: the character ignores water (walks along the bottom, like a heavy knight). From above it wades but stops where it gets deep. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim")
 	bool bCanSwim = true;
+
+	/** From above (Top Down levels): its speed wading through the shallows, part of its run speed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Swim", meta = (ClampMin = "0.05", ClampMax = "1"))
+	float WadeSpeedScale = 0.6f;
 
 	// --- Moving ---------------------------------------------------------------------------------
 
@@ -239,7 +336,8 @@ struct ONYX2DRUNTIME_API FOnyxSwimSettings
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnyxMovementSignature);
 
 /**
- * Platformer movement on the XZ plane.
+ * 2D movement on the XZ plane: a platformer seen from the side (gravity, jumps, walls, ledges, swimming), or walking in
+ * any direction seen from above (Top Down game style: up the screen is north, no gravity).
  * Commands (JumpPressed, TryDash, ...) are input-agnostic so players, AI and cutscenes can drive it.
  */
 UCLASS(ClassGroup = (Onyx2D), meta = (BlueprintSpawnableComponent))
@@ -253,8 +351,49 @@ public:
 	enum ECustomMode : uint8
 	{
 		CMOVE_OnyxDash = 0,
-		CMOVE_OnyxSwim = 1
+		CMOVE_OnyxSwim = 1,
+		CMOVE_OnyxLedge = 2,
+		/** Walking over the ground seen from above. */
+		CMOVE_OnyxTopDown = 3
 	};
+
+	// ------------------------------------------------------------- Game style
+	/** Moves the way its level is played (side view or top down). Off: the Game Style below, whatever the level. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Game Style")
+	bool bUseLevelGameStyle = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Game Style", meta = (EditCondition = "!bUseLevelGameStyle"))
+	EOnyxGameStyle GameStyle = EOnyxGameStyle::SideView;
+
+	/**
+	 * Top down: how much ground the character stands on, a circle at its feet this many cm across the middle (0: as wide as
+	 * its capsule). Walls stop the feet and blows land on them; the picture above them can overlap a wall behind.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Game Style", meta = (ClampMin = "0", Units = "cm"))
+	float FootprintRadius = 0.f;
+
+	/** Seen from above: walking in any direction, no gravity or jumping (the Top Down game style). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	bool IsTopDown() const { return bTopDown; }
+
+	/** The style it moves in: its level's, or its own Game Style. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	EOnyxGameStyle GetActiveGameStyle() const;
+
+	/** Moves in this style from now on (top down: its capsule becomes a footprint at its feet; side view: back). */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
+	void SetGameStyle(EOnyxGameStyle Style);
+
+	/** Top down: where it is steered, X right and Y up the screen (north), at most 1 long (zero while it can't move). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	FVector2D GetTopDownSteering() const;
+
+	/** The capsule standing up (radius, half height): from above, the one it had before it became a footprint at the feet. */
+	FVector2D GetStandingCapsule() const;
+
+	/** Top down: dashes in a direction (X right, Y up the screen). Returns false when on cooldown. */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
+	bool TryDashToward(FVector2D Direction);
 
 	// ------------------------------------------------------------- Tuning
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Ground", meta = (ClampMin = "0"))
@@ -265,6 +404,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Ground", meta = (ClampMin = "0"))
 	float GroundBraking = 4600.f;
+
+	/** Below this fraction of the run speed it walks (the Walk clip) instead of running. 0 = always runs. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Ground", meta = (ClampMin = "0", ClampMax = "1"))
+	float WalkSpeedFraction = 0.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Air", meta = (ClampMin = "0", ClampMax = "1"))
 	float AirSteering = 0.9f;
@@ -281,6 +424,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Swim")
 	FOnyxSwimSettings SwimSettings;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Slide")
+	FOnyxSlideSettings SlideSettings;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Ledge")
+	FOnyxLedgeSettings LedgeSettings;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Slopes")
+	FOnyxSlopeSettings SlopeSettings;
+
 	// ------------------------------------------------------------- Commands
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
 	void JumpPressed();
@@ -288,7 +440,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
 	void JumpReleased();
 
-	/** Dashes horizontally (Direction sign only). Returns false when on cooldown or out of air dashes. */
+	/** Dashes horizontally (Direction sign only; top down: where it is steered, else that way). Returns false when on cooldown or out of air dashes. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
 	bool TryDash(float Direction);
 
@@ -296,16 +448,25 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
 	void SetCrouchHeld(bool bHeld) { bCrouchHeld = bHeld; }
 
+	/** Hold to aim up (up-slashes, climbing onto a ledge). The stick pushed up counts too. */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
+	void SetUpHeld(bool bHeld) { bUpHeld = bHeld; }
+
 	/** Up / down steering from -1 to 1 (the stick): the swimming direction. Keys steer through Jump (up) and Down. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
 	void SetVerticalInput(float Value) { VerticalInput = FMath::Clamp(Value, -1.f, 1.f); }
 
+	/** Crouching: Down held on the ground, or kept low by a ceiling after a slide. */
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
-	bool IsCrouchingDown() const { return bCrouchHeld && IsMovingOnGround() && !bDashing; }
+	bool IsCrouchingDown() const { return ((bCrouchHeld && IsMovingOnGround()) || (IsCrouching() && IsMovingOnGround())) && !bDashing && !bSliding; }
 
 	/** Speed while crouching, as a fraction of the run speed (0 = stand still). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Crouch", meta = (ClampMin = "0", ClampMax = "1"))
 	float CrouchSpeedScale = 0.f;
+
+	/** Crouching and sliding make the capsule this much of its height (fit under low ceilings). 1 = it stays tall. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Crouch", meta = (ClampMin = "0.2", ClampMax = "1"))
+	float CrouchHeightScale = 1.f;
 
 	/** Falls through the one-way platform currently stood on. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
@@ -315,6 +476,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
 	void SetMovementLocked(bool bLocked) { bMovementLocked = bLocked; }
 
+	/** Its speed times this (aiming a bow, carrying something heavy): walking, running, swimming, crouching. 1: as tuned. */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
+	void SetSpeedScale(float Scale) { SpeedScale = FMath::Max(Scale, 0.f); }
+
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	float GetSpeedScale() const { return SpeedScale; }
+
 	// ------------------------------------------------------------- Queries
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
 	EOnyxLocomotion GetLocomotionState() const;
@@ -322,15 +490,84 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
 	bool IsDashing() const { return bDashing; }
 
+	/** A dash that started on the ground (a roll). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	bool IsRolling() const { return bDashing && bDashFromGround; }
+
+	/** It came out of the water a moment ago (a jump or a breach out of it). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	bool HasJustLeftWater() const { return WaterExitTimer > 0.f; }
+
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	bool IsSliding() const { return bSliding; }
+
+	/** Sliding down a wet (or too steep) slope. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	bool IsSlopeSliding() const { return bSlopeSliding; }
+
+	/** How steep the ground under it is, degrees (0 when flat or in the air). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	float GetGroundSlope() const { return GroundSlope; }
+
+	/** How far its picture is lowered to stand on the slope under its middle, cm (0 or less; Slopes > Feet On Slope). */
+	float GetSlopeFootOffset() const { return SlopeFootOffset; }
+
+	/**
+	 * Running water it stands or wades in (call this every frame it is in it): Push carries it along, cm/s² (X right,
+	 * Y up); Wet makes slopes slide it. Lasts a moment after the last call.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
+	void ApplySurfaceFlow(FVector2D Push, bool bWet);
+
+	/** Hanging from a ledge or pulling up onto it. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	bool IsOnLedge() const { return bLedgeHanging || bLedgeClimbing; }
+
+	/** The side of the ledge it holds: +1 right, -1 left. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	float GetLedgeDirection() const { return LedgeDirection; }
+
+	/** Down is held (crouching on the ground, aiming down in the air), or the stick pushed down. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	bool IsDownHeld() const { return bCrouchHeld || VerticalInput < -0.5f; }
+
+	/** Up is held (aiming up), or the stick pushed up. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	bool IsUpHeld() const { return bUpHeld || VerticalInput > 0.5f; }
+
+	/** Ends a dash under way at once (an attack out of a dash takes over its speed). */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
+	void CancelDash();
+
+	/** Bounced off something in the air (a down-slash on a foe): one jump and the air dashes are back. */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
+	void RefreshAirMoves() { JumpsUsed = FMath::Min(JumpsUsed, 1); AirDashesUsed = 0; }
+
+	/** How fast it was falling when it last landed, cm/s. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	float GetLandingSpeed() const { return LandingSpeed; }
+
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
 	bool IsWallSliding() const { return bWallSliding; }
+
+	/** The side of the wall it is against: +1 right, -1 left, 0 none. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	float GetWallDirection() const { return float(WallDirection); }
 
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
 	bool IsMovementLocked() const { return bMovementLocked; }
 
-	/** True while swimming in Onyx Water. */
+	/** True while swimming in Onyx Water (from above: out beyond the shallows). */
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
-	bool IsSwimmingInWater() const { return MovementMode == MOVE_Custom && CustomMovementMode == CMOVE_OnyxSwim; }
+	bool IsSwimmingInWater() const { return (MovementMode == MOVE_Custom && CustomMovementMode == CMOVE_OnyxSwim) || bSwimmingFromAbove; }
+
+	/** Swimming under the water, the head below the surface (not bobbing at the surface with it out). */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	bool IsUnderWater() const;
+
+	/** From above: walking through the shallows of Onyx Water. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
+	bool IsWading() const { return bWading; }
 
 	/** The water the character is in (null on land). */
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Movement")
@@ -410,6 +647,17 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
 	FOnyxMovementSignature OnDrowning;
 
+	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
+	FOnyxMovementSignature OnSlideStarted;
+
+	/** Caught a ledge. */
+	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
+	FOnyxMovementSignature OnLedgeGrabbed;
+
+	/** Finished pulling up onto a ledge. */
+	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Movement")
+	FOnyxMovementSignature OnLedgeClimbed;
+
 	/** Re-applies RunSpeed/Acceleration/... to the underlying CharacterMovement values. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Movement")
 	void ApplyTuning();
@@ -419,6 +667,8 @@ public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual float GetGravityZ() const override;
 	virtual float GetMaxSpeed() const override;
+	virtual void SetDefaultMovementMode() override;
+	virtual bool HandlePendingLaunch() override;
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
@@ -427,8 +677,12 @@ protected:
 	virtual void PhysCustom(float DeltaTime, int32 Iterations) override;
 	virtual void OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode) override;
 	virtual FVector ConstrainInputAcceleration(const FVector& InputAcceleration) const override;
+	virtual float GetMaxAcceleration() const override;
+	virtual float GetMaxBrakingDeceleration() const override;
 
 private:
+	/** Slope steepness, sliding down wet slopes, running water's push, the feet's offset onto the slope. */
+	void UpdateSlopes(float DeltaTime);
 	float GetBaseGravityZ() const;
 	float GetJumpVelocityForHeight(float Height) const;
 	void TryConsumeJumpBuffer();
@@ -459,6 +713,30 @@ private:
 	float GetCapsuleHalfHeight() const;
 	void EndDash();
 	void HandleLanded();
+	/** Crouching shrinks the capsule (Crouch Height Scale), sliding too. */
+	void UpdateCrouch();
+	void StartSlide();
+	void EndSlide();
+	/** Catches a ledge on side Direction (+1 right) when one is in reach. */
+	bool TryGrabLedge(float Direction);
+	void StartLedgeClimb();
+	void ReleaseLedge();
+	void PhysLedge(float DeltaTime, int32 Iterations);
+	/** Top down: speeding up towards the steering, braking when let go, sliding along walls. */
+	void PhysTopDown(float DeltaTime, int32 Iterations);
+	/** Moves by Delta, sliding along what it meets (dashes and top-down walking). */
+	void MoveAndSlide(const FVector& Delta, float DeltaTime);
+	/** Puts the movement in Style: the capsule shaped for it (feet kept where they are) and its movement mode. */
+	void ApplyGameStyle(EOnyxGameStyle Style);
+
+	bool bTopDown = false;
+	/** From above: wading through the shallows, swimming beyond them. */
+	bool bWading = false;
+	bool bSwimmingFromAbove = false;
+	/** The capsule as it was before it became a top-down footprint (radius, half height). */
+	FVector2D SideCapsule = FVector2D::ZeroVector;
+	/** Top down: the dash's direction. */
+	FVector2D DashVector = FVector2D(1.f, 0.f);
 
 	float JumpBufferTimer = 0.f;
 	float CoyoteTimer = 0.f;
@@ -474,8 +752,29 @@ private:
 	bool bJumpActive = false;
 	bool bDashing = false;
 	bool bCrouchHeld = false;
+	bool bUpHeld = false;
+	float SpeedScale = 1.f;
 	bool bWallSliding = false;
 	bool bMovementLocked = false;
+	bool bDashFromGround = false;
+	bool bCrouchHeldBefore = false;
+
+	bool bSliding = false;
+	float SlideTimer = 0.f;
+	float SlideDirection = 1.f;
+	float SlideStartSpeed = 0.f;
+
+	bool bLedgeHanging = false;
+	bool bLedgeClimbing = false;
+	float LedgeDirection = 1.f;
+	float LedgeTimer = 0.f;
+	/** After letting go: no grabbing for a moment. */
+	float LedgeRegrabTimer = 0.f;
+	FVector LedgeHangLocation = FVector::ZeroVector;
+	FVector LedgeStandLocation = FVector::ZeroVector;
+
+	float FallingSpeed = 0.f;
+	float LandingSpeed = 0.f;
 
 	TWeakObjectPtr<UPrimitiveComponent> DropThroughSurface;
 	TWeakObjectPtr<class AOnyxWater> Water;
@@ -491,4 +790,11 @@ private:
 	float DrownTimer = 0.f;
 	float BreathBubbleTimer = 0.f;
 	float SwimLean = 0.f;
+
+	bool bSlopeSliding = false;
+	float GroundSlope = 0.f;
+	float SlopeFootOffset = 0.f;
+	FVector2D SurfacePush = FVector2D::ZeroVector;
+	bool bSurfaceWet = false;
+	float SurfaceFlowTimer = 0.f;
 };

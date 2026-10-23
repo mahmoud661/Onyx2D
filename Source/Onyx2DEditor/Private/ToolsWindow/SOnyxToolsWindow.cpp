@@ -13,6 +13,7 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/Text/STextBlock.h"
 #include "ToolsWindow/OnyxToolWidgets.h"
 #include "Widgets/SBoxPanel.h"
@@ -94,7 +95,7 @@ void SOnyxToolsWindow::Construct(const FArguments& InArgs, const TSharedRef<SDoc
 
 	const TSharedRef<FTabManager::FLayout> Layout = FLayoutSaveRestore::LoadFromConfig(GEditorLayoutIni, MakeLayout({ HomeTabId }, HomeTabId));
 	OwnerTab->SetOnPersistVisualState(SDockTab::FOnPersistVisualState::CreateSP(this, &SOnyxToolsWindow::SaveLayout));
-	GConfig->GetBool(ConfigSection, TEXT("SidebarCollapsed"), bSidebarCollapsed, GEditorPerProjectIni);
+	GConfig->GetBool(ConfigSection, TEXT("SidebarHidden"), bSidebarHidden, GEditorPerProjectIni);
 
 	ChildSlot
 	[
@@ -127,7 +128,6 @@ SOnyxToolsWindow::~SOnyxToolsWindow()
 
 TSharedRef<SWidget> SOnyxToolsWindow::MakeSidebar()
 {
-	auto Collapsed = [this]() { return bSidebarCollapsed ? EVisibility::Collapsed : EVisibility::Visible; };
 	TSharedRef<SVerticalBox> Items = SNew(SVerticalBox);
 	int32 Group = INDEX_NONE;
 	for (const FToolInfo& Tool : GetTools())
@@ -139,7 +139,7 @@ TSharedRef<SWidget> SOnyxToolsWindow::MakeSidebar()
 			[
 				SNew(SBox).HeightOverride(14.f)
 				[
-					SNew(STextBlock).Text(GroupNames[Group]).Font(OnyxTools::Font(8, true)).ColorAndOpacity(OnyxTools::Muted()).Visibility_Lambda(Collapsed)
+					SNew(STextBlock).Text(GroupNames[Group]).Font(OnyxTools::Font(8, true)).ColorAndOpacity(OnyxTools::Muted())
 				]
 			];
 		}
@@ -180,14 +180,14 @@ TSharedRef<SWidget> SOnyxToolsWindow::MakeSidebar()
 					]
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
 					[
-						SNew(STextBlock).Text(Tool.Label).Visibility_Lambda(Collapsed)
+						SNew(STextBlock).Text(Tool.Label)
 					]
 				]
 			]
 		];
 	}
 
-	auto FooterButton = [Collapsed](const FText& Label, const FText& Tooltip, TFunction<FName()> GetIcon, TFunction<void()> OnClicked)
+	auto FooterButton = [](const FText& Label, const FText& Tooltip, TFunction<FName()> GetIcon, TFunction<void()> OnClicked)
 	{
 		return SNew(SButton)
 			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
@@ -204,19 +204,60 @@ TSharedRef<SWidget> SOnyxToolsWindow::MakeSidebar()
 				]
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
 				[
-					SNew(STextBlock).Text(Label).Visibility_Lambda(Collapsed)
+					SNew(STextBlock).Text(Label)
 				]
 			];
 	};
 
-	return SNew(SBorder)
+	const auto SetHidden = [this](bool bHidden)
+	{
+		bSidebarHidden = bHidden;
+		GConfig->SetBool(ConfigSection, TEXT("SidebarHidden"), bSidebarHidden, GEditorPerProjectIni);
+	};
+	// Hidden, only this strip is left: its arrow brings the sidebar back.
+	const TSharedRef<SWidget> Strip = SNew(SBorder)
+		.BorderImage(FAppStyle::GetBrush("Brushes.Header"))
+		.Padding(0.f)
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ContentPadding(FMargin(1.f, 8.f))
+			.VAlign(VAlign_Top)
+			.ToolTipText(INVTEXT("Show the Onyx2D sidebar"))
+			.OnClicked_Lambda([SetHidden]() { SetHidden(false); return FReply::Handled(); })
+			[
+				SNew(SImage).Image(FAppStyle::GetBrush("Icons.ChevronRight")).ColorAndOpacity(FSlateColor::UseForeground()).DesiredSizeOverride(FVector2D(12.f, 12.f))
+			]
+		];
+
+	const TSharedRef<SWidget> Bar = SNew(SBorder)
 		.BorderImage(FAppStyle::GetBrush("Brushes.Header"))
 		.Padding(0.f)
 		[
 			SNew(SBox)
-			.WidthOverride_Lambda([this]() { return bSidebarCollapsed ? 44.f : 176.f; })
+			.WidthOverride(176.f)
 			[
 				SNew(SVerticalBox)
+				// At the top: the arrow that hides the sidebar (the strip it leaves brings it back).
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 4.f, 0.f)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(10.f, 0.f, 0.f, 0.f)
+					[
+						SNew(STextBlock).Text(INVTEXT("ONYX2D")).Font(OnyxTools::Font(8, true)).ColorAndOpacity(OnyxTools::Muted())
+					]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+					[
+						SNew(SButton)
+						.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+						.ContentPadding(FMargin(4.f))
+						.ToolTipText(INVTEXT("Hide the sidebar: the tools get the whole window (the arrow on the strip it leaves brings it back)"))
+						.OnClicked_Lambda([SetHidden]() { SetHidden(true); return FReply::Handled(); })
+						[
+							SNew(SImage).Image(FAppStyle::GetBrush("Icons.ChevronLeft")).ColorAndOpacity(FSlateColor::UseForeground())
+						]
+					]
+				]
 				+ SVerticalBox::Slot().FillHeight(1.f)
 				[
 					SNew(SScrollBox) + SScrollBox::Slot()[Items]
@@ -239,23 +280,18 @@ TSharedRef<SWidget> SOnyxToolsWindow::MakeSidebar()
 							OnyxTools::OpenDocs(Page);
 						})
 				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 6.f)
 				[
 					FooterButton(INVTEXT("Reset Layout"), INVTEXT("Close every tool and start again from Home."),
 						[]() { return FName("Icons.Refresh"); }, [this]() { ResetLayout(); })
 				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
-				[
-					FooterButton(INVTEXT("Collapse"), INVTEXT("Show only icons in the sidebar (or the names again)."),
-						[this]() { return FName(bSidebarCollapsed ? "Icons.ChevronRight" : "Icons.ChevronLeft"); },
-						[this]()
-						{
-							bSidebarCollapsed = !bSidebarCollapsed;
-							GConfig->SetBool(ConfigSection, TEXT("SidebarCollapsed"), bSidebarCollapsed, GEditorPerProjectIni);
-						})
-				]
 			]
 		];
+
+	return SNew(SWidgetSwitcher)
+		.WidgetIndex_Lambda([this]() { return bSidebarHidden ? 1 : 0; })
+		+ SWidgetSwitcher::Slot()[Bar]
+		+ SWidgetSwitcher::Slot()[Strip];
 }
 
 void SOnyxToolsWindow::RegisterTabs()

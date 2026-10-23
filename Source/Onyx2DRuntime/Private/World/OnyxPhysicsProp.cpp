@@ -78,6 +78,19 @@ void AOnyxPhysicsProp::OnConstruction(const FTransform& Transform)
 void AOnyxPhysicsProp::BeginPlay()
 {
 	Super::BeginPlay();
+	if (UOnyx2DLibrary::IsTopDown(this))
+	{
+		// From above it sits on the ground: nothing pulls it down the screen, it slides where it is pushed and stops, and it
+		// never turns (a crate seen from above stays square on).
+		Body->SetEnableGravity(false);
+		Body->SetLinearDamping(GroundFriction);
+		Body->BodyInstance.bLockXRotation = true;
+		Body->BodyInstance.bLockYRotation = true;
+		Body->BodyInstance.bLockZRotation = true;
+		Body->BodyInstance.bLockYTranslation = true;
+		Body->BodyInstance.SetDOFLock(EDOFMode::SixDOF);
+		return;
+	}
 	// Moves and turns in the level's plane only (locked here: in the editor the body doesn't simulate, nothing to lock).
 	Body->BodyInstance.SetDOFLock(EDOFMode::XZPlane);
 }

@@ -142,13 +142,80 @@ void UOnyxTileCollisionComponent::Rebuild()
 	const TArray<EOnyxTileCollision> Cells = BuildCellGrid(*TileMapComponent, Width, Height);
 
 	const TArray<FIntRect> SolidRects = FOnyxCollisionMerge::MergeRectangles(Mask(Cells, EOnyxTileCollision::Solid), Width, Height);
-	UpdateLightOccluders(TileMapComponent, SolidRects);
-	for (const FIntRect& Rect : SolidRects)
+	const FVector OneCell = CellRectToLocalBox(*TileMapComponent, FIntRect(0, 0, 1, 1)).GetSize();
+	auto IsSlope = [&](int32 X, int32 Y)
 	{
-		UPrimitiveComponent* Solid = AddBox(*TileMapComponent, UBoxComponent::StaticClass(), CellRectToLocalBox(*TileMapComponent, Rect));
+		return X >= 0 && Y >= 0 && X < Width && Y < Height
+			&& (Cells[Y * Width + X] == EOnyxTileCollision::SlopeUp || Cells[Y * Width + X] == EOnyxTileCollision::SlopeDown);
+	};
+	auto IsSolid = [&](int32 X, int32 Y)
+	{
+		// Beyond the map's sides the ground carries on (no rim pokes out there).
+		return X < 0 || Y < 0 || X >= Width || Y >= Height || Cells[Y * Width + X] == EOnyxTileCollision::Solid;
+	};
+	// Solid cells next to a slope tile: their rim (Solid Outset) would poke up through the ramp as a bump at every step,
+	// so each of them gets it only on its open sides; all other solid cells merge into boxes as before.
+	TArray<bool> NearSlope;
+	NearSlope.Init(false, Width * Height);
+	bool bAnyNear = false;
+	for (int32 Y = 0; Y < Height; ++Y)
+	{
+		for (int32 X = 0; X < Width; ++X)
+		{
+			if (Cells[Y * Width + X] != EOnyxTileCollision::Solid)
+			{
+				continue;
+			}
+			for (int32 DY = -1; DY <= 1 && !NearSlope[Y * Width + X]; ++DY)
+			{
+				for (int32 DX = -1; DX <= 1; ++DX)
+				{
+					if (IsSlope(X + DX, Y + DY))
+					{
+						NearSlope[Y * Width + X] = true;
+						bAnyNear = true;
+						break;
+					}
+				}
+			}
+		}
+	}
+	TArray<bool> PlainSolid = Mask(Cells, EOnyxTileCollision::Solid);
+	for (int32 Index = 0; Index < PlainSolid.Num(); ++Index)
+	{
+		PlainSolid[Index] = PlainSolid[Index] && !NearSlope[Index];
+	}
+	for (const FIntRect& Rect : bAnyNear ? FOnyxCollisionMerge::MergeRectangles(PlainSolid, Width, Height) : SolidRects)
+	{
+		const FBox Box = CellRectToLocalBox(*TileMapComponent, Rect).ExpandBy(FVector(OneCell.X * SolidOutset, 0.f, OneCell.Z * SolidOutset));
+		UPrimitiveComponent* Solid = AddBox(*TileMapComponent, UBoxComponent::StaticClass(), Box);
 		Solid->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
 		Solid->RegisterComponent();
 	}
+	for (int32 Y = 0; bAnyNear && Y < Height; ++Y)
+	{
+		for (int32 X = 0; X < Width; ++X)
+		{
+			if (!NearSlope[Y * Width + X])
+			{
+				continue;
+			}
+			// Local Z runs up while rows run down: the top side is Max.Z.
+			FBox Box = CellRectToLocalBox(*TileMapComponent, FIntRect(X, Y, X + 1, Y + 1));
+			const float RimX = OneCell.X * SolidOutset;
+			const float RimZ = OneCell.Z * SolidOutset;
+			auto Open = [&](int32 NX, int32 NY) { return !IsSolid(NX, NY) && !IsSlope(NX, NY); };
+			Box.Max.Z += Open(X, Y - 1) ? RimZ : 0.f;
+			Box.Min.Z -= Open(X, Y + 1) ? RimZ : 0.f;
+			Box.Min.X -= Open(X - 1, Y) ? RimX : 0.f;
+			Box.Max.X += Open(X + 1, Y) ? RimX : 0.f;
+			UPrimitiveComponent* Solid = AddBox(*TileMapComponent, UBoxComponent::StaticClass(), Box);
+			Solid->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+			Solid->RegisterComponent();
+		}
+	}
+	const TArray<TPair<FVector, FVector>> Ramps = BuildRamps(*TileMapComponent, Cells, Width, Height);
+	UpdateLightOccluders(TileMapComponent, SolidRects, Ramps);
 
 	for (const FIntRect& Rect : FOnyxCollisionMerge::MergeRows(Mask(Cells, EOnyxTileCollision::OneWay), Width, Height))
 	{
@@ -174,6 +241,63 @@ void UOnyxTileCollisionComponent::Rebuild()
 		Hazard->RegisterComponent();
 	}
 
+	// Edge tiles: a thin wall along each blocked side, joined along rows (north and south sides) and columns (east, west).
+	{
+		const UPaperTileMap* Map = TileMapComponent->TileMap;
+		TArray<uint8> Edges;
+		Edges.SetNumZeroed(Width * Height);
+		bool bAny = false;
+		for (int32 Y = 0; Y < Height; ++Y)
+		{
+			for (int32 X = 0; X < Width; ++X)
+			{
+				if (Cells[Y * Width + X] != EOnyxTileCollision::Solid)
+				{
+					Edges[Y * Width + X] = FOnyxTileCollision::ResolveCellEdges(Map, X, Y);
+					bAny |= Edges[Y * Width + X] != 0;
+				}
+			}
+		}
+		auto AddWall = [&](const FIntRect& Area, uint8 Side)
+		{
+			FBox Box = CellRectToLocalBox(*TileMapComponent, Area);
+			const float Across = (Side == EOnyxTileEdge::North || Side == EOnyxTileEdge::South) ? OneCell.Z * EdgeThickness : OneCell.X * EdgeThickness;
+			switch (Side)
+			{
+			case EOnyxTileEdge::North: Box.Min.Z = Box.Max.Z - Across; break;
+			case EOnyxTileEdge::South: Box.Max.Z = Box.Min.Z + Across; break;
+			case EOnyxTileEdge::West:  Box.Max.X = Box.Min.X + Across; break;
+			default:                   Box.Min.X = Box.Max.X - Across; break;
+			}
+			UPrimitiveComponent* Wall = AddBox(*TileMapComponent, UBoxComponent::StaticClass(), Box);
+			Wall->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+			Wall->RegisterComponent();
+		};
+		for (int32 Pass = 0; bAny && Pass < 4; ++Pass)
+		{
+			const uint8 Side = Pass == 0 ? EOnyxTileEdge::North : Pass == 1 ? EOnyxTileEdge::South : Pass == 2 ? EOnyxTileEdge::West : EOnyxTileEdge::East;
+			const bool bAlongRows = Side == EOnyxTileEdge::North || Side == EOnyxTileEdge::South;
+			const int32 Lines = bAlongRows ? Height : Width, Length = bAlongRows ? Width : Height;
+			for (int32 Line = 0; Line < Lines; ++Line)
+			{
+				int32 Start = -1;
+				for (int32 At = 0; At <= Length; ++At)
+				{
+					const bool bBlocked = At < Length && (Edges[bAlongRows ? Line * Width + At : At * Width + Line] & Side);
+					if (bBlocked && Start < 0)
+					{
+						Start = At;
+					}
+					else if (!bBlocked && Start >= 0)
+					{
+						AddWall(bAlongRows ? FIntRect(Start, Line, At, Line + 1) : FIntRect(Line, Start, Line + 1, At), Side);
+						Start = -1;
+					}
+				}
+			}
+		}
+	}
+
 	if (bBlockLevelEdges)
 	{
 		// One cell wide, just outside the map, from the bottom row up past the top.
@@ -189,7 +313,62 @@ void UOnyxTileCollisionComponent::Rebuild()
 	UpdateRegistry(true);
 }
 
-void UOnyxTileCollisionComponent::UpdateLightOccluders(const UPaperTileMapComponent* TileMapComponent, const TArray<FIntRect>& SolidRects)
+TArray<TPair<FVector, FVector>> UOnyxTileCollisionComponent::BuildRamps(UPaperTileMapComponent& TileMapComponent, const TArray<EOnyxTileCollision>& Cells, int32 Width, int32 Height)
+{
+	TArray<TPair<FVector, FVector>> Surfaces;
+	const FVector OneCell = CellRectToLocalBox(TileMapComponent, FIntRect(0, 0, 1, 1)).GetSize();
+	auto Is = [&](int32 X, int32 Y, EOnyxTileCollision Type) { return X >= 0 && Y >= 0 && X < Width && Y < Height && Cells[Y * Width + X] == Type; };
+	auto Corner = [&](int32 X, int32 Y) { return TileMapComponent.GetTileCornerPosition(X, Y, 0, false); };
+	for (const EOnyxTileCollision Type : { EOnyxTileCollision::SlopeDown, EOnyxTileCollision::SlopeUp })
+	{
+		// Going down to the right a row of them steps (+1, +1) (rows run down); going up, (+1, -1).
+		const int32 Step = Type == EOnyxTileCollision::SlopeDown ? 1 : -1;
+		for (int32 Y = 0; Y < Height; ++Y)
+		{
+			for (int32 X = 0; X < Width; ++X)
+			{
+				if (!Is(X, Y, Type) || Is(X - 1, Y - Step, Type))
+				{
+					continue; // not a slope tile, or not the first of its row
+				}
+				int32 Count = 1;
+				while (Is(X + Count, Y + Count * Step, Type))
+				{
+					++Count;
+				}
+				// The line through the row: from the first tile's top-left corner to the last one's bottom-right (going down),
+				// or from the first's bottom-left to the last's top-right (going up); raised by the rim like the flat tops.
+				const FVector Rim(0.f, 0.f, OneCell.Z * SolidOutset);
+				const FVector A = (Type == EOnyxTileCollision::SlopeDown ? Corner(X, Y) : Corner(X, Y + 1)) + Rim;
+				const FVector B = (Type == EOnyxTileCollision::SlopeDown ? Corner(X + Count, Y + Count) : Corner(X + Count, Y + 1 - Count)) + Rim;
+				const FVector Along = (B - A).GetSafeNormal();
+				FVector Up = FVector::CrossProduct(Along, FVector(0.f, 1.f, 0.f)).GetSafeNormal();
+				if (Up.Z < 0.f)
+				{
+					Up = -Up;
+				}
+				// A box under the line, deep enough to fill down to the stepped solid tiles beneath it.
+				const float Depth = OneCell.Z;
+				UBoxComponent* Ramp = NewObject<UBoxComponent>(GetOwner(), UBoxComponent::StaticClass(), NAME_None, RF_Transient | RF_TextExportTransient | RF_DuplicateTransient);
+				Ramp->SetupAttachment(&TileMapComponent);
+				Ramp->SetMobility(TileMapComponent.Mobility);
+				Ramp->SetRelativeLocation((A + B) * 0.5f - Up * Depth * 0.5f);
+				Ramp->SetRelativeRotation(FRotationMatrix::MakeFromXZ(Along, Up).Rotator());
+				Ramp->SetBoxExtent(FVector(FVector::Dist(A, B) * 0.5f, Thickness * 0.5f, Depth * 0.5f));
+				Ramp->SetCanEverAffectNavigation(false);
+				Ramp->bIsEditorOnly = false;
+				Ramp->ComponentTags.Add(TEXT("Onyx.Slope"));
+				Ramp->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+				Ramp->RegisterComponent();
+				Shapes.Add(Ramp);
+				Surfaces.Emplace(A, B);
+			}
+		}
+	}
+	return Surfaces;
+}
+
+void UOnyxTileCollisionComponent::UpdateLightOccluders(const UPaperTileMapComponent* TileMapComponent, const TArray<FIntRect>& SolidRects, const TArray<TPair<FVector, FVector>>& RampSurfaces)
 {
 	UOnyxLightingSubsystem* Lighting = GetWorld() ? GetWorld()->GetSubsystem<UOnyxLightingSubsystem>() : nullptr;
 	if (!Lighting || !TileMapComponent)
@@ -221,6 +400,12 @@ void UOnyxTileCollisionComponent::UpdateLightOccluders(const UPaperTileMapCompon
 		Segments.Add({ TopRight, BottomRight, Soak });
 		Segments.Add({ BottomRight, BottomLeft, Soak });
 		Segments.Add({ BottomLeft, TopLeft, Soak });
+	}
+	for (const TPair<FVector, FVector>& Surface : RampSurfaces)
+	{
+		const FVector A = ToWorld.TransformPosition(Surface.Key);
+		const FVector B = ToWorld.TransformPosition(Surface.Value);
+		Segments.Add({ FVector2D(A.X, A.Z), FVector2D(B.X, B.Z), Soak });
 	}
 	Lighting->SetOccluders(this, MoveTemp(Segments));
 }

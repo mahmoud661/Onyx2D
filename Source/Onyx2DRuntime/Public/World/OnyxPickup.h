@@ -79,6 +79,14 @@ public:
 
 	virtual void OnConstruction(const FTransform& Transform) override;
 
+	/**
+	 * Throws it (cm/s across and up): it flies, falls, bounces off walls and lands, then bobs there. Coins bursting from a
+	 * foe. In a Top Down level it skips across the ground instead (Across sideways, scattered up and down the screen by Up)
+	 * with a hop in the picture.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D")
+	void Pop(FVector2D Velocity);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -88,6 +96,17 @@ private:
 	void HandleOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
 
 	USceneComponent* GetBobbingComponent() const;
+	void TickPop(float DeltaSeconds);
+	/** Collected by a player it already touches (one that was standing there when it landed). */
+	void CollectIfTouching();
+
+	FVector2D PopVelocity = FVector2D::ZeroVector;
+	bool bPopping = false;
+	/** Top down: thrown across the ground, the picture hopping above it (its height and rising speed). */
+	void TickPopTopDown(float DeltaSeconds);
+	bool bTopDownPop = false;
+	float PopHop = 0.f;
+	float PopRise = 0.f;
 
 	float Phase = 0.f;
 	FVector VisualBase = FVector::ZeroVector;

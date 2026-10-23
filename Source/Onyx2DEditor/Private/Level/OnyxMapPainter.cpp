@@ -177,6 +177,7 @@ APaperTileMapActor* FOnyxMapPainter::PlaceMapInLevel()
 		Actor->GetRenderComponent()->SetTileMap(Map);
 		Actor->SetActorLabel(Map->GetName());
 		FOnyxTileBuilder::EnsureTileCollision(Actor);
+		FOnyxLevelTools::FileInOutliner(Actor);
 	}
 	return Actor;
 }
@@ -230,6 +231,23 @@ FVector2D FOnyxMapPainter::WorldToMapPixels(const FVector& Location) const
 	const double Row = (AxisX.X * DZ - AxisX.Z * DX) / Det;
 	const FIntPoint Tile = GetTileSize();
 	return FVector2D((Column + 0.5) * Tile.X, (Row + 0.5) * Tile.Y);
+}
+
+FVector FOnyxMapPainter::MapPixelsToWorld(const FVector2D& Pixels) const
+{
+	const APaperTileMapActor* Actor = FindMapActor();
+	if (!Actor || !TileMap.IsValid())
+	{
+		return FVector::ZeroVector;
+	}
+	const UPaperTileMapComponent* Map = Actor->GetRenderComponent();
+	const FVector Origin = Map->GetTileCenterPosition(0, 0, 0, true);
+	const FVector AxisX = Map->GetTileCenterPosition(1, 0, 0, true) - Origin;
+	const FVector AxisY = Map->GetTileCenterPosition(0, 1, 0, true) - Origin;
+	const FIntPoint Tile = GetTileSize();
+	const double Column = Pixels.X / FMath::Max(Tile.X, 1) - 0.5;
+	const double Row = Pixels.Y / FMath::Max(Tile.Y, 1) - 0.5;
+	return Origin + AxisX * Column + AxisY * Row;
 }
 
 TOptional<FVector> FOnyxMapPainter::GetMapCornerInLevel() const
@@ -770,6 +788,7 @@ AActor* FOnyxMapPainter::PlaceArea(const FIntRect& Cells, const FOnyxPainterBrus
 	}
 	Actor->Tags.AddUnique(*(LayerTagPrefix + ObjectLayer.ToString()));
 	Brush.SetArea(Actor, Area);
+	FOnyxLevelTools::FileInOutliner(Actor); // under its map in the World Outliner
 	return Actor;
 }
 
@@ -815,6 +834,7 @@ AActor* FOnyxMapPainter::PlaceObject(const FIntPoint& Cell, const FOnyxPainterBr
 			Actor->SetActorLocation(Actor->GetActorLocation() + FVector(Location.X - Origin.X, 0.f, CellBottom - (Origin.Z - Extent.Z)));
 		}
 	}
+	FOnyxLevelTools::FileInOutliner(Actor); // under its map in the World Outliner
 	return Actor;
 }
 

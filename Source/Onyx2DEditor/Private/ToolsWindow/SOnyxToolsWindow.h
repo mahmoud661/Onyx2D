@@ -68,5 +68,6 @@ private:
 	TSharedPtr<SOnyxAnimationEditor> AnimationEditor;
 	TSharedPtr<SOnyxTileTool> TileTool;
 	TSharedPtr<SOnyxPainterTool> PainterTool;
-	bool bSidebarCollapsed = false;
+	/** Hidden: only a thin strip on the left to bring the sidebar back. */
+	bool bSidebarHidden = false;
 };

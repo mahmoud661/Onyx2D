@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerStart.h"
 #include "Lighting/OnyxLight2D.h"
 #include "Lighting/OnyxLightingEnvironment.h"
+#include "World/OnyxBreakable.h"
 #include "World/OnyxCheckpoint.h"
 #include "World/OnyxHazardVolume.h"
 #include "World/OnyxLevelBuilder.h"
@@ -15,7 +16,9 @@
 #include "World/OnyxParallaxBackground.h"
 #include "World/OnyxPhysicsProp.h"
 #include "World/OnyxPickup.h"
+#include "World/OnyxMirrorFloor.h"
 #include "World/OnyxWater.h"
+#include "World/OnyxFog.h"
 #include "World/OnyxLightSwitch.h"
 #include "World/OnyxSign.h"
 #include "Logic/OnyxTriggerZone.h"
@@ -33,9 +36,12 @@ const TArray<FOnyxPlaceable>& GetOnyxPlaceables()
 		{ AOnyxOneWayPlatform::StaticClass(), INVTEXT("One-Way Platform"), INVTEXT("Jump up through it, drop down with Down + Jump.") },
 		{ AOnyxHazardVolume::StaticClass(), INVTEXT("Hazard"), INVTEXT("Spikes / lava: hurts on touch.") },
 		{ AOnyxWater::StaticClass(), INVTEXT("Water"), INVTEXT("Characters swim, physics objects float and bob, the surface ripples and splashes. Set its Size, current and colours.") },
+		{ AOnyxFog::StaticClass(), INVTEXT("Fog"), INVTEXT("Drifting fog over part of the level: glows where 2D lights shine into it, thins round the player and lanterns (Onyx Fog Clearer), thickens at night. In front of characters or behind them. Presets: Ground Mist, Marsh Fog, Cave Haze, Fog Wall, Night Mist.") },
+		{ AOnyxMirrorFloor::StaticClass(), INVTEXT("Mirror Floor"), INVTEXT("A polished floor that mirrors the scene above it (characters, props, walls, lights), fading with depth; shows while playing. Put it on the floor's surface; set its Width, Strength, Depth and Tint.") },
 		{ AOnyxPhysicsProp::StaticClass(), INVTEXT("Physics Prop"), INVTEXT("A crate, barrel or rock (any sprite) that falls, tumbles and floats in water, or sinks when it is denser.") },
-		{ AOnyxLightingEnvironment::StaticClass(), INVTEXT("Onyx Lighting"), INVTEXT("The level's look: sun, ambient, depth fog, bloom, colour grade. Presets: Day, Dusk, Night, Cave, Dungeon.") },
-		{ AOnyxLight2D::StaticClass(), INVTEXT("2D Light"), INVTEXT("Torch, candle, lantern, magic, crystal, lava or window light with a glow halo; flickers or pulses; optional crackle / hum sound.") },
+		{ AOnyxBreakable::StaticClass(), INVTEXT("Breakable"), INVTEXT("A pot, urn or barrel (any sprite) the player smashes: it rocks when struck, bursts with an effect and a sound, and can spill coins. Never blocks the way.") },
+		{ AOnyxLightingEnvironment::StaticClass(), INVTEXT("Onyx Lighting"), INVTEXT("The level's look: global light, a 2D sun for normal maps, bloom, colour grade, day and night. Presets: Day, Dusk, Night, Cave, Dungeon.") },
+		{ AOnyxLight2D::StaticClass(), INVTEXT("2D Light"), INVTEXT("A light from a point, a cone, a line or a window-shaped area, with 2D shadows: torch, candle, neon, searchlight, hanging lantern, alarm, stained glass and more. Flickers, pulses, strobes, sweeps or swings; can light itself at night only; optional halo and sound.") },
 		{ AOnyxLightSwitch::StaticClass(), INVTEXT("Light Switch"), INVTEXT("Lever or pressure plate that turns lights on / off with a fade (Interact input, or walking over it).") },
 		{ AOnyxTriggerZone::StaticClass(), INVTEXT("Trigger Zone"), INVTEXT("Invisible box that makes things happen with no Blueprint: pick When (the player enters, presses Interact...) and list Actions (message, open a door, give a key, teleport...).") },
 		{ AOnyxSign::StaticClass(), INVTEXT("Sign"), INVTEXT("A sign the player reads with Interact: its pages show in the dialogue box.") },

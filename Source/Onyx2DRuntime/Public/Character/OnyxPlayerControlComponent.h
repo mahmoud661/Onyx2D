@@ -34,6 +34,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Control")
 	bool IsControlEnabled() const { return bControlEnabled; }
 
+	/** Does what the Interact input does: moves a conversation on, else uses what is nearby (talks, reads a sign). */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Control")
+	void Interact();
+
+	/** The clip the character plays when it uses something in front (a door, a sign, a chest, a person); none: none. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Control")
+	FName InteractClip;
+
 	/** The Interact input was pressed with nothing to use nearby. */
 	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Control")
 	FOnyxInteractSignature OnInteract;
@@ -70,6 +78,18 @@ private:
 	void HandleDownPressed(const FInputActionValue& Value);
 	void HandleDownReleased(const FInputActionValue& Value);
 	void HandleInteract(const FInputActionValue& Value);
+	void HandleUpPressed(const FInputActionValue& Value);
+	void HandleUpReleased(const FInputActionValue& Value);
+	void HandleMendPressed(const FInputActionValue& Value);
+	void HandleMendReleased(const FInputActionValue& Value);
+	void HandleShootPressed(const FInputActionValue& Value);
+	void HandleShootReleased(const FInputActionValue& Value);
+	void HandleThrowPressed(const FInputActionValue& Value);
+	void HandleThrowReleased(const FInputActionValue& Value);
+	void HandleAim(const FInputActionValue& Value);
+	void HandleHotbarNext(const FInputActionValue& Value);
+	void HandleHotbarPrevious(const FInputActionValue& Value);
+	void HandleHotbarSlot(const FInputActionValue& Value);
 
 	UPROPERTY(Transient)
 	TObjectPtr<UEnhancedInputComponent> InputComponent;

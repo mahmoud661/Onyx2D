@@ -1,7 +1,10 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "OnyxUISubsystem.h"
+#include "OnyxShopScreen.h"
+#include "World/OnyxShop.h"
 #include "Core/Onyx2DTypes.h"
+#include "Core/OnyxGameMode.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -27,11 +30,13 @@ void UOnyxUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	PauseHandle = FOnyxGameDelegates::OnPauseRequested.AddUObject(this, &UOnyxUISubsystem::HandlePauseRequested);
+	ShopHandle = AOnyxShop::OnShopOpened.AddUObject(this, &UOnyxUISubsystem::ShowShop);
 }
 
 void UOnyxUISubsystem::Deinitialize()
 {
 	FOnyxGameDelegates::OnPauseRequested.Remove(PauseHandle);
+	AOnyxShop::OnShopOpened.Remove(ShopHandle);
 	Super::Deinitialize();
 }
 
@@ -140,7 +145,13 @@ void UOnyxUISubsystem::ShowHUD()
 	{
 		return;
 	}
-	HUD = CreateWidget<UOnyxHUDWidget>(PC, ResolveClass(UOnyxUISettings::Get()->HUDClass));
+	// The level's game mode can bring its own HUD; otherwise the project's.
+	TSoftClassPtr<UOnyxHUDWidget> HUDClass = UOnyxUISettings::Get()->HUDClass;
+	if (const AOnyxGameMode* Mode = GetWorld() ? GetWorld()->GetAuthGameMode<AOnyxGameMode>() : nullptr; Mode && Mode->HUDWidgetClass.IsValid())
+	{
+		HUDClass = TSoftClassPtr<UOnyxHUDWidget>(FSoftObjectPath(Mode->HUDWidgetClass));
+	}
+	HUD = CreateWidget<UOnyxHUDWidget>(PC, ResolveClass(HUDClass));
 	if (HUD)
 	{
 		HUD->AddToViewport(0);
@@ -191,6 +202,28 @@ void UOnyxUISubsystem::TogglePauseMenu()
 	UGameplayStatics::SetGamePaused(PC, true);
 	FInputModeUIOnly InputMode;
 	InputMode.SetWidgetToFocus(PauseMenu->TakeWidget());
+	PC->SetInputMode(InputMode);
+	PC->SetShowMouseCursor(true);
+}
+
+void UOnyxUISubsystem::ShowShop(AOnyxShop* Shop, AActor* Buyer)
+{
+	APlayerController* PC = GetPlayerController();
+	// Only the shop this player opened, and never over the pause menu.
+	if (!PC || !Shop || Shop->GetWorld() != PC->GetWorld() || IsPauseMenuOpen() || (Buyer && Buyer != PC->GetPawn()))
+	{
+		return;
+	}
+	UOnyxShopScreen* Screen = CreateWidget<UOnyxShopScreen>(PC, UOnyxShopScreen::StaticClass());
+	if (!Screen)
+	{
+		return;
+	}
+	Screen->SetShop(Shop, Buyer);
+	Screen->AddToViewport(40);
+	UGameplayStatics::SetGamePaused(PC, true);
+	FInputModeUIOnly InputMode;
+	InputMode.SetWidgetToFocus(Screen->TakeWidget());
 	PC->SetInputMode(InputMode);
 	PC->SetShowMouseCursor(true);
 }

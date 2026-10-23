@@ -277,7 +277,7 @@ TArray<TSharedPtr<FOnyxValidationIssue>> FOnyxLevelValidator::Validate()
 	if (Environment && !ExtraLights.IsEmpty())
 	{
 		AddIssue(Issues, EOnyxIssueSeverity::Warning,
-			FText::Format(INVTEXT("Onyx Lighting already has a key light and ambient light, but {0} other sun / sky light(s) light the level too: everything is lit twice and moods can't darken it."), ExtraLights.Num()),
+			FText::Format(INVTEXT("Onyx Lighting already lights the level (global light, 2D sun and 2D lights), but {0} other sun / sky light(s) light it too: everything is lit twice and moods can't darken it."), ExtraLights.Num()),
 			INVTEXT("Remove extras"), [ExtraLights]()
 			{
 				const FScopedTransaction Transaction(INVTEXT("Remove Extra Lights"));
@@ -293,7 +293,7 @@ TArray<TSharedPtr<FOnyxValidationIssue>> FOnyxLevelValidator::Validate()
 	else if (!Environment && !ExtraLights.IsEmpty())
 	{
 		AddIssue(Issues, EOnyxIssueSeverity::Info,
-			INVTEXT("Lit by plain sun / sky lights: use Onyx Lighting for moods (Day, Dusk, Night, Cave...), depth fog, fixed exposure and zone blending."),
+			INVTEXT("Lit by plain sun / sky lights: use Onyx Lighting for 2D lights and shadows, moods (Day, Dusk, Night, Cave...), fixed exposure and zone blending."),
 			INVTEXT("Replace"), [ExtraLights]()
 			{
 				const FScopedTransaction Transaction(INVTEXT("Use Onyx Lighting"));

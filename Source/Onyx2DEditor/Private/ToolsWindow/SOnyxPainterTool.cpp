@@ -1,6 +1,15 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "ToolsWindow/SOnyxPainterTool.h"
+#include "Builders/OnyxImageAnalysis.h"
+#include "Engine/Texture2D.h"
+#include "Level/OnyxLevelTools.h"
+#include "Misc/ConfigCacheIni.h"
+#include "ScopedTransaction.h"
+#include "Widgets/Colors/SColorBlock.h"
+#include "Widgets/Colors/SColorPicker.h"
+#include "Widgets/Input/SComboButton.h"
+#include "World/OnyxParallaxBackground.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SNumericEntryBox.h"
@@ -52,9 +61,20 @@ using namespace OnyxTools;
 
 namespace
 {
+	/** Where the painter keeps its panel toggles (per project). */
+	const TCHAR* PainterConfig = TEXT("Onyx2D.Painter");
+	/** Wider than this, the toolbar shows its labels; narrower, icons only. */
+	constexpr float ToolbarLabelsWidth = 1120.f;
+
 	constexpr int32 EntitiesItem = -1;
 	constexpr int32 DecorItem = -2;
 	constexpr int32 BackgroundItem = -3;
+	/** Image layers: -100 is the backdrop's layer 0, -101 its layer 1... */
+	constexpr int32 ImageItemBase = -100;
+	bool IsImageItem(int32 Item) { return Item <= ImageItemBase; }
+	int32 ImageIndexOf(int32 Item) { return ImageItemBase - Item; }
+	int32 ImageItemOf(int32 LayerIndex) { return ImageItemBase - LayerIndex; }
+	bool IsTextureAsset(const FAssetData& Asset) { return Asset.IsInstanceOf(UTexture2D::StaticClass()); }
 
 	/** Edges of an area object (water) grabbed to resize it. */
 	enum EOnyxAreaEdge : int32
@@ -76,6 +96,34 @@ namespace
 		case BackgroundItem: return FOnyxBrushLibrary::BackgroundLayer;
 		default:             return NAME_None;
 		}
+	}
+
+	/** The backdrop's layers front to back (nearest first), as the game draws them over one another. */
+	TArray<int32> BackdropOrder(const AOnyxParallaxBackground* Background)
+	{
+		TArray<int32> Order;
+		if (Background)
+		{
+			for (int32 Index = 0; Index < Background->BackgroundLayers.Num(); ++Index)
+			{
+				Order.Add(Index);
+			}
+			const TArray<FOnyxParallaxLayer>& Layers = Background->BackgroundLayers;
+			Order.StableSort([&Layers](int32 A, int32 B) { return Layers[A].Depth < Layers[B].Depth; });
+		}
+		return Order;
+	}
+
+	FText BackdropLayerKind(const FOnyxParallaxLayer& Layer)
+	{
+		return !Layer.Material.IsNull() ? INVTEXT("Mist") : (!Layer.Texture ? INVTEXT("Colour") : INVTEXT("Image"));
+	}
+
+	FText BackdropLayerTooltip(const FOnyxParallaxLayer& Layer)
+	{
+		return FText::Format(INVTEXT("{0} layer behind the tiles, {1} m back; it follows the camera {2}% sideways, {3}% up and down (100% = stays on screen, like a sky).\nClick it to edit it: drag its picture on the map, its corners to resize. Double-click to rename, right-click for more."),
+			BackdropLayerKind(Layer), FText::AsNumber(FMath::RoundToInt(Layer.Depth / 100.f)),
+			FText::AsNumber(FMath::RoundToInt(Layer.Factor.X * 100.f)), FText::AsNumber(FMath::RoundToInt(Layer.Factor.Y * 100.f)));
 	}
 
 	TSharedRef<SWidget> Chip(const TAttribute<FText>& Text)
@@ -130,12 +178,23 @@ void SOnyxPainterTool::Construct(const FArguments& InArgs)
 	ShowOnlyCategories(Inspector.ToSharedRef(), AActor::StaticClass(), { TEXT("Onyx"), TEXT("TransformCommon"), TEXT("Sprite"), TEXT("Default") });
 	RefreshBrushes();
 
+	GConfig->GetBool(PainterConfig, TEXT("ShowPalette"), bShowPalette, GEditorPerProjectIni);
+	GConfig->GetBool(PainterConfig, TEXT("ShowSidePanels"), bShowSidePanels, GEditorPerProjectIni);
+	GConfig->GetBool(PainterConfig, TEXT("ParallaxPreview"), bShowParallax, GEditorPerProjectIni);
+
 	ChildSlot
 	[
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			ToolbarStrip(MakeToolbar(), MakeMapPicker())
+			// The toolbar with its labels when there is room, icons only when the panel is narrow (nothing hidden in a "more" menu).
+			ToolbarStrip(SAssignNew(ToolbarArea, SBox)
+				[
+					SNew(SWidgetSwitcher)
+					.WidgetIndex_Lambda([this]() { return ToolbarArea.IsValid() && ToolbarArea->GetCachedGeometry().GetLocalSize().X < ToolbarLabelsWidth ? 1 : 0; })
+					+ SWidgetSwitcher::Slot()[MakeToolbar(true)]
+					+ SWidgetSwitcher::Slot()[MakeToolbar(false)]
+				], MakePanelToggles())
 		]
 		+ SVerticalBox::Slot().FillHeight(1.f).Padding(0.f, 2.f, 0.f, 0.f)
 		[
@@ -144,7 +203,11 @@ void SOnyxPainterTool::Construct(const FArguments& InArgs)
 			.PhysicalSplitterHandleSize(2.f)
 			+ SSplitter::Slot().Value(0.25f)
 			[
-				MakePalettePanel()
+				SNew(SBox)
+				.Visibility_Lambda([this]() { return bShowPalette ? EVisibility::Visible : EVisibility::Collapsed; })
+				[
+					MakePalettePanel()
+				]
 			]
 			+ SSplitter::Slot().Value(0.53f)
 			[
@@ -152,11 +215,15 @@ void SOnyxPainterTool::Construct(const FArguments& InArgs)
 			]
 			+ SSplitter::Slot().Value(0.22f)
 			[
-				SNew(SSplitter)
-				.Orientation(Orient_Vertical)
-				.PhysicalSplitterHandleSize(2.f)
-				+ SSplitter::Slot().Value(0.4f)[MakeLayersPanel()]
-				+ SSplitter::Slot().Value(0.6f)[MakeInspector()]
+				SNew(SBox)
+				.Visibility_Lambda([this]() { return bShowSidePanels ? EVisibility::Visible : EVisibility::Collapsed; })
+				[
+					SNew(SSplitter)
+					.Orientation(Orient_Vertical)
+					.PhysicalSplitterHandleSize(2.f)
+					+ SSplitter::Slot().Value(0.62f)[MakeLayersPanel()]
+					+ SSplitter::Slot().Value(0.38f)[MakeInspector()]
+				]
 			]
 		]
 		+ SVerticalBox::Slot().AutoHeight()
@@ -166,6 +233,7 @@ void SOnyxPainterTool::Construct(const FArguments& InArgs)
 	];
 
 	TransactedHandle = FCoreUObjectDelegates::OnObjectTransacted.AddSP(this, &SOnyxPainterTool::HandleObjectTransacted);
+	RegisterActiveTimer(0.5f, FWidgetActiveTimerDelegate::CreateSP(this, &SOnyxPainterTool::PollBackdrop));
 	LibraryHandle = FOnyxBrushLibrary::Get().OnChanged.AddSP(this, &SOnyxPainterTool::RefreshBrushes);
 
 	// Start on the first tile map already in the level.
@@ -193,10 +261,10 @@ SOnyxPainterTool::~SOnyxPainterTool()
 
 // --- Layout ------------------------------------------------------------------------
 
-TSharedRef<SWidget> SOnyxPainterTool::MakeToolbar()
+TSharedRef<SWidget> SOnyxPainterTool::MakeToolbar(bool bLabels)
 {
 	FSlimHorizontalToolBarBuilder Toolbar(nullptr, FMultiBoxCustomization::None);
-	Toolbar.SetLabelVisibility(EVisibility::Visible);
+	Toolbar.SetLabelVisibility(bLabels ? EVisibility::Visible : EVisibility::Collapsed);
 	const FCanExecuteAction HasMap = FCanExecuteAction::CreateLambda([this]() { return Painter.GetTileMap() != nullptr; });
 
 	Toolbar.AddToolBarButton(FUIAction(FExecuteAction::CreateSP(this, &SOnyxPainterTool::CreateNewMap),
@@ -238,6 +306,13 @@ TSharedRef<SWidget> SOnyxPainterTool::MakeToolbar()
 		FIsActionChecked::CreateLambda([this]() { return bShowCollision; })),
 		NAME_None, INVTEXT("Collision"), INVTEXT("Show what collides (C): green = solid, blue = one-way top, red = hazard. Set tile types in the palette."),
 		FOnyxEditorStyle::Icon("Onyx2D.Collision"), EUserInterfaceActionType::ToggleButton);
+	Toolbar.AddToolBarButton(FUIAction(FExecuteAction::CreateLambda([this]()
+		{
+			bShowParallax = !bShowParallax;
+			GConfig->SetBool(PainterConfig, TEXT("ParallaxPreview"), bShowParallax, GEditorPerProjectIni);
+		}), FCanExecuteAction(), FIsActionChecked::CreateLambda([this]() { return bShowParallax; })),
+		NAME_None, INVTEXT("Parallax"), INVTEXT("Parallax preview: the image layers slide as you pan, at their own speeds, as the game's camera sees them from the middle of the view. Off: they stay where they are placed, moving with the map."),
+		FOnyxEditorStyle::Icon("Onyx2D.Tab.Parallax"), EUserInterfaceActionType::ToggleButton);
 	Toolbar.AddToolBarButton(FUIAction(FExecuteAction::CreateLambda([this]() { Canvas->RequestFit(); }), HasMap),
 		NAME_None, INVTEXT("Fit"), INVTEXT("Frame the whole map (Home)."), FOnyxEditorStyle::Icon("Onyx2D.Tool.Fit"));
 	Toolbar.AddSeparator();
@@ -248,72 +323,105 @@ TSharedRef<SWidget> SOnyxPainterTool::MakeToolbar()
 
 TSharedRef<SWidget> SOnyxPainterTool::MakeMapPicker()
 {
-	return SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 3.f)
 		[
-			SNew(STextBlock).Text(INVTEXT("Tile Map"))
+			SNew(STextBlock).Text(INVTEXT("Tile map")).Font(Font(8)).ColorAndOpacity(FSlateColor::UseSubduedForeground())
 		]
-		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(SBox).WidthOverride(240.f)
+			SNew(SObjectPropertyEntryBox)
+			.AllowedClass(UPaperTileMap::StaticClass())
+			.DisplayThumbnail(false)
+			.AllowCreate(false)
+			.ObjectPath_Lambda([this]() { return Painter.GetTileMap() ? Painter.GetTileMap()->GetPathName() : FString(); })
+			.OnObjectChanged_Lambda([this](const FAssetData& Asset) { SetTileMap(Cast<UPaperTileMap>(Asset.GetAsset())); })
+		];
+}
+
+TSharedRef<SWidget> SOnyxPainterTool::MakePanelToggles()
+{
+	auto Toggle = [this](const FText& Label, const FText& Tooltip, bool& Flag, const TCHAR* Key)
+	{
+		bool* FlagPtr = &Flag;
+		return SNew(SCheckBox)
+			.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+			.ToolTipText(Tooltip)
+			.IsChecked_Lambda([FlagPtr]() { return *FlagPtr ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+			.OnCheckStateChanged_Lambda([FlagPtr, Key](ECheckBoxState State)
+			{
+				*FlagPtr = State == ECheckBoxState::Checked;
+				GConfig->SetBool(PainterConfig, Key, *FlagPtr, GEditorPerProjectIni);
+			})
 			[
-				SNew(SObjectPropertyEntryBox)
-				.AllowedClass(UPaperTileMap::StaticClass())
-				.DisplayThumbnail(false)
-				.AllowCreate(false)
-				.ObjectPath_Lambda([this]() { return Painter.GetTileMap() ? Painter.GetTileMap()->GetPathName() : FString(); })
-				.OnObjectChanged_Lambda([this](const FAssetData& Asset) { SetTileMap(Cast<UPaperTileMap>(Asset.GetAsset())); })
-			]
+				SNew(SBox).Padding(FMargin(8.f, 1.f))[SNew(STextBlock).Text(Label).Font(Font(9))]
+			];
+	};
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 2.f, 0.f)
+		[
+			Toggle(INVTEXT("Palette"), INVTEXT("Show or hide the palette (tiles and objects) on the left"), bShowPalette, TEXT("ShowPalette"))
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			Toggle(INVTEXT("Panels"), INVTEXT("Show or hide the layers, the backdrop and the inspector on the right"), bShowSidePanels, TEXT("ShowSidePanels"))
 		];
 }
 
 TSharedRef<SWidget> SOnyxPainterTool::MakePalettePanel()
 {
-	const TSharedRef<SWidget> ZoomButtons = SNew(SHorizontalBox)
-		.Visibility_Lambda([this]() { return IsObjectLayer() ? EVisibility::Collapsed : EVisibility::Visible; })
-		+ SHorizontalBox::Slot().AutoWidth()[IconButton("Icons.Minus", INVTEXT("Zoom out"), [this]() { PaletteZoom = FMath::Max((PaletteZoom > 0.f ? PaletteZoom : 2.f) - 1.f, 1.f); })]
-		+ SHorizontalBox::Slot().AutoWidth()[IconButton("Onyx2D.Tool.Fit.Small", INVTEXT("Fit to the panel"), [this]() { PaletteZoom = 0.f; }, true)]
-		+ SHorizontalBox::Slot().AutoWidth()[IconButton("Icons.Plus", INVTEXT("Zoom in"), [this]() { PaletteZoom = FMath::Min((PaletteZoom > 0.f ? PaletteZoom : 2.f) + 1.f, 12.f); })];
-
 	// Tiles / Objects: what the left panel paints with (switches between the tile layer and the Entities layer).
 	auto ModeToggle = [this](const FText& Label, const FText& Tooltip, bool bObjects)
 	{
 		return SNew(SCheckBox)
 			.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
 			.ToolTipText(Tooltip)
-			.IsChecked_Lambda([this, bObjects]() { return IsObjectLayer() == bObjects ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+			.IsChecked_Lambda([this, bObjects]() { return !IsImageLayer() && IsObjectLayer() == bObjects ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
 			.OnCheckStateChanged_Lambda([this, bObjects](ECheckBoxState)
 			{
-				if (IsObjectLayer() != bObjects)
+				if (IsImageLayer() || IsObjectLayer() != bObjects)
 				{
 					SelectLayer(bObjects ? EntitiesItem : Painter.GetLayer());
 					RefreshLayers();
 				}
 			})
 			[
-				SNew(SBox).Padding(FMargin(8.f, 1.f))[SNew(STextBlock).Text(Label)]
+				SNew(SBox).Padding(FMargin(2.f, 2.f)).HAlign(HAlign_Center)[SNew(STextBlock).Text(Label).Font(Font(9))]
 			];
 	};
-	const TSharedRef<SWidget> HeaderExtra = SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 2.f, 0.f)
+	// Tiles | Objects across the whole panel, so both names fit even when it is narrow.
+	const TSharedRef<SWidget> ModeRow = SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 0.f, 2.f, 0.f)
 		[
 			ModeToggle(INVTEXT("Tiles"), INVTEXT("Paint tiles on the selected tile layer."), false)
 		]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 8.f, 0.f)
+		+ SHorizontalBox::Slot().FillWidth(1.f)
 		[
 			ModeToggle(INVTEXT("Objects"), INVTEXT("Place gameplay objects (player start, foes, pickups, lights...) and your own Blueprints. Select tool (S) picks and drags placed objects on any layer."), true)
-		]
-		+ SHorizontalBox::Slot().AutoWidth()
-		[
-			ZoomButtons
 		];
 
+	// Zoom the tiles (smaller, fit the panel, bigger), in the header where there is room even in a narrow panel.
+	const TSharedRef<SWidget> ZoomButtons = SNew(SHorizontalBox)
+		.Visibility_Lambda([this]() { return IsObjectLayer() || IsImageLayer() ? EVisibility::Collapsed : EVisibility::Visible; })
+		+ SHorizontalBox::Slot().AutoWidth()[IconButton("Icons.Minus", INVTEXT("Zoom out"), [this]() { PaletteZoom = FMath::Max((PaletteZoom > 0.f ? PaletteZoom : 2.f) - 1.f, 1.f); })]
+		+ SHorizontalBox::Slot().AutoWidth()[IconButton("Onyx2D.Tool.Fit.Small", INVTEXT("Fit to the panel"), [this]() { PaletteZoom = 0.f; }, true)]
+		+ SHorizontalBox::Slot().AutoWidth()[IconButton("Icons.Plus", INVTEXT("Zoom in"), [this]() { PaletteZoom = FMath::Min((PaletteZoom > 0.f ? PaletteZoom : 2.f) + 1.f, 12.f); })];
+
 	return Section(TAttribute<FText>::CreateSP(this, &SOnyxPainterTool::GetPaletteTitle),
-		SNew(SWidgetSwitcher)
-		.WidgetIndex_Lambda([this]() { return IsObjectLayer() ? 1 : 0; })
-		+ SWidgetSwitcher::Slot()[MakeTilePalette()]
-		+ SWidgetSwitcher::Slot()[MakeObjectPalette()],
-		HeaderExtra);
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(8.f, 6.f, 8.f, 0.f)
+		[
+			ModeRow
+		]
+		+ SVerticalBox::Slot().FillHeight(1.f)
+		[
+			SNew(SWidgetSwitcher)
+			.WidgetIndex_Lambda([this]() { return IsImageLayer() ? 2 : (IsObjectLayer() ? 1 : 0); })
+			+ SWidgetSwitcher::Slot()[MakeTilePalette()]
+			+ SWidgetSwitcher::Slot()[MakeObjectPalette()]
+			+ SWidgetSwitcher::Slot()[MakeImageLayerPanel()]
+		],
+		ZoomButtons);
 }
 
 TSharedRef<SWidget> SOnyxPainterTool::MakeTilePalette()
@@ -442,6 +550,9 @@ TSharedRef<SWidget> SOnyxPainterTool::MakeCollisionBar()
 				+ SWrapBox::Slot()[TypeButton(EOnyxTileCollision::Solid, INVTEXT("Full block: ground, walls, ceilings"))]
 				+ SWrapBox::Slot()[TypeButton(EOnyxTileCollision::OneWay, INVTEXT("Platform: stand on top, jump up through, drop with Down + Jump"))]
 				+ SWrapBox::Slot()[TypeButton(EOnyxTileCollision::Hazard, INVTEXT("Hurts on touch (spikes, lava)"))]
+				+ SWrapBox::Slot()[TypeButton(EOnyxTileCollision::Edge, INVTEXT("Blocks crossing the tile's sides (cliff rims and fences from above)"))]
+				+ SWrapBox::Slot()[TypeButton(EOnyxTileCollision::SlopeUp, INVTEXT("45 degree slope rising to the right: a diagonal row of them makes one smooth ramp"))]
+				+ SWrapBox::Slot()[TypeButton(EOnyxTileCollision::SlopeDown, INVTEXT("45 degree slope going down to the right: a diagonal row of them makes one smooth ramp"))]
 				+ SWrapBox::Slot()
 				[
 					SNew(SButton)
@@ -528,7 +639,7 @@ TSharedRef<ITableRow> SOnyxPainterTool::GenerateBrushRow(TSharedPtr<FOnyxPainter
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 10.f, 0.f)
 			[
-				SNew(SBox).WidthOverride(28.f).HeightOverride(28.f).HAlign(HAlign_Center).VAlign(VAlign_Center)
+				SNew(SBox).WidthOverride(36.f).HeightOverride(36.f).HAlign(HAlign_Center).VAlign(VAlign_Center)
 				[
 					SNew(SImage).Image_Lambda([this, Item]() { return GetBrushThumbnail(Item); })
 				]
@@ -565,17 +676,93 @@ TSharedRef<SWidget> SOnyxPainterTool::MakeLayersPanel()
 		.OnContextMenuOpening(this, &SOnyxPainterTool::MakeLayerContextMenu)
 		.OnSelectionChanged_Lambda([this](TSharedPtr<int32> Item, ESelectInfo::Type) { if (Item.IsValid()) { SelectLayer(*Item); } });
 
-	const TSharedRef<SWidget> AddLayer = SNew(SBox)
-		.IsEnabled_Lambda([this]() { return Painter.GetTileMap() != nullptr; })
+	const TSharedRef<SWidget> AddLayer = SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth()
 		[
-			IconButton("Icons.Plus", INVTEXT("Add a tile layer in front of the others"), [this]() { Painter.AddLayer(); RefreshLayers(); })
+			IconButton("Icons.FolderClosed", INVTEXT("Tidy the World Outliner: what stands in a tile map goes in that map's folder, by kind (Characters, Lights, Props, Pickups, Gameplay). Folders of your own are left alone."), []()
+			{
+				const FScopedTransaction Transaction(INVTEXT("Tidy World Outliner"));
+				const int32 Moved = FOnyxLevelTools::OrganizeOutliner(FOnyxLevelTools::GetEditorWorld());
+				Notify(Moved > 0 ? FText::Format(INVTEXT("Filed {0} actor(s) in the World Outliner by map and kind"), Moved) : INVTEXT("The World Outliner is already tidy."), true);
+			})
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			MakeAddLayerMenu()
 		];
-	return Section(INVTEXT("Layers"), LayerList.ToSharedRef(), AddLayer);
+	return Section(INVTEXT("Layers"),
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(8.f, 6.f)
+		[
+			MakeMapPicker()
+		]
+		+ SVerticalBox::Slot().FillHeight(1.f)
+		[
+			// Textures dropped here become image layers in the middle of the view.
+			SNew(SAssetDropTarget)
+			.bSupportsMultiDrop(true)
+			.OnAreAssetsAcceptableForDrop_Lambda([this](TArrayView<FAssetData> Assets) { return Painter.FindMapActor() && Assets.ContainsByPredicate(IsTextureAsset); })
+			.OnAssetsDropped_Lambda([this](const FDragDropEvent&, TArrayView<FAssetData> Assets)
+			{
+				TArray<UTexture2D*> Textures;
+				for (const FAssetData& Asset : Assets)
+				{
+					if (UTexture2D* Texture = Cast<UTexture2D>(Asset.GetAsset()))
+					{
+						Textures.Add(Texture);
+					}
+				}
+				AddImageLayers(Textures, {});
+			})
+			[
+				LayerList.ToSharedRef()
+			]
+		],
+		AddLayer);
+}
+
+TSharedRef<SWidget> SOnyxPainterTool::MakeAddLayerMenu()
+{
+	return SNew(SComboButton)
+		.HasDownArrow(false)
+		.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+		.ContentPadding(FMargin(3.f))
+		.ToolTipText(INVTEXT("Add a layer: tiles, or a picture behind the tiles"))
+		.IsEnabled_Lambda([this]() { return Painter.GetTileMap() != nullptr; })
+		.ButtonContent()
+		[
+			SNew(SImage).Image(FAppStyle::GetBrush("Icons.Plus")).ColorAndOpacity(FSlateColor::UseForeground())
+		]
+		.OnGetMenuContent_Lambda([this]()
+		{
+			FMenuBuilder Menu(true, nullptr);
+			Menu.AddMenuEntry(INVTEXT("Tile Layer"), INVTEXT("A tile layer in front of the others"), FOnyxEditorStyle::Icon("Onyx2D.Layer.Tiles"),
+				FUIAction(FExecuteAction::CreateLambda([this]() { Painter.AddLayer(); RefreshLayers(); })));
+			Menu.AddMenuEntry(INVTEXT("Image Layer"), INVTEXT("A picture behind the tiles, in the middle of the view: one per texture selected in the Content Browser. Or drop textures on the map, where they should go."),
+				FOnyxEditorStyle::Icon("Onyx2D.Tab.Parallax"),
+				FUIAction(FExecuteAction::CreateLambda([this]()
+				{
+					const TArray<UTexture2D*> Textures = GetSelectedTextures();
+					if (Textures.IsEmpty())
+					{
+						Notify(INVTEXT("Select textures in the Content Browser first, or drop them on the map."), false);
+						return;
+					}
+					AddImageLayers(Textures, {});
+				})));
+			Menu.AddMenuEntry(INVTEXT("Colour Layer"), INVTEXT("A plain colour band behind the tiles, across the level (a sky)"), FOnyxEditorStyle::Icon("Onyx2D.Tab.Parallax"),
+				FUIAction(FExecuteAction::CreateLambda([this]() { AddImageLayers({}, {}); })));
+			return Menu.MakeWidget();
+		});
 }
 
 TSharedRef<ITableRow> SOnyxPainterTool::GenerateLayerRow(TSharedPtr<int32> Item, const TSharedRef<STableViewBase>& Owner)
 {
 	const int32 LayerItem = *Item;
+	if (IsImageItem(LayerItem))
+	{
+		return GenerateImageLayerRow(ImageIndexOf(LayerItem), Item, Owner);
+	}
 	const bool bObjects = LayerItem < 0;
 	return SNew(STableRow<TSharedPtr<int32>>, Owner)
 		.Padding(FMargin(4.f, 4.f))
@@ -636,6 +823,75 @@ TSharedRef<ITableRow> SOnyxPainterTool::GenerateLayerRow(TSharedPtr<int32> Item,
 TSharedPtr<SWidget> SOnyxPainterTool::MakeLayerContextMenu()
 {
 	const TArray<TSharedPtr<int32>> Selection = LayerList->GetSelectedItems();
+	if (!Selection.IsEmpty() && IsImageItem(*Selection[0]) && GetImageLayer(ImageIndexOf(*Selection[0])))
+	{
+		const int32 Index = ImageIndexOf(*Selection[0]);
+		// The image layers' order in the list (nearest first): moving one swaps its distance with its neighbour's.
+		TArray<int32> Images;
+		for (const TSharedPtr<int32>& Item : LayerItems)
+		{
+			if (IsImageItem(*Item))
+			{
+				Images.Add(ImageIndexOf(*Item));
+			}
+		}
+		const int32 Position = Images.IndexOfByKey(Index);
+		const int32 Nearer = Position > 0 ? Images[Position - 1] : INDEX_NONE;
+		const int32 Farther = Images.IsValidIndex(Position + 1) ? Images[Position + 1] : INDEX_NONE;
+		auto SwapDepth = [this, Index](int32 Other)
+		{
+			EditBackdrop(INVTEXT("Move Image Layer"), [Index, Other](AOnyxParallaxBackground& Background)
+			{
+				if (Background.BackgroundLayers.IsValidIndex(Index) && Background.BackgroundLayers.IsValidIndex(Other))
+				{
+					Swap(Background.BackgroundLayers[Index].Depth, Background.BackgroundLayers[Other].Depth);
+				}
+			});
+			RefreshLayers();
+		};
+		FMenuBuilder Menu(true, nullptr);
+		Menu.AddMenuEntry(INVTEXT("Move Forward"), INVTEXT("Draw it in front of the image layer above it"), FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.ArrowUp"),
+			FUIAction(FExecuteAction::CreateLambda([SwapDepth, Nearer]() { SwapDepth(Nearer); }), FCanExecuteAction::CreateLambda([Nearer]() { return Nearer != INDEX_NONE; })));
+		Menu.AddMenuEntry(INVTEXT("Move Back"), INVTEXT("Draw it behind the image layer below it"), FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.ArrowDown"),
+			FUIAction(FExecuteAction::CreateLambda([SwapDepth, Farther]() { SwapDepth(Farther); }), FCanExecuteAction::CreateLambda([Farther]() { return Farther != INDEX_NONE; })));
+		Menu.AddMenuEntry(INVTEXT("Use Selected Texture"), INVTEXT("Show the texture selected in the Content Browser on this layer"), FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Import"),
+			FUIAction(FExecuteAction::CreateLambda([this, Index]()
+			{
+				const TArray<UTexture2D*> Textures = GetSelectedTextures();
+				if (Textures.IsEmpty())
+				{
+					Notify(INVTEXT("Select a texture in the Content Browser first."), false);
+					return;
+				}
+				EditBackdrop(INVTEXT("Set Image Layer Picture"), [Index, Texture = Textures[0]](AOnyxParallaxBackground& Background)
+				{
+					if (Background.BackgroundLayers.IsValidIndex(Index))
+					{
+						Background.BackgroundLayers[Index].Texture = Texture;
+					}
+				});
+			})));
+		Menu.AddMenuEntry(INVTEXT("Duplicate"), INVTEXT("A copy of this layer, just in front of it"), FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Duplicate"),
+			FUIAction(FExecuteAction::CreateLambda([this, Index]()
+			{
+				const int32 Copy = FindBackdrop() ? FindBackdrop()->BackgroundLayers.Num() : INDEX_NONE;
+				EditBackdrop(INVTEXT("Duplicate Image Layer"), [Index](AOnyxParallaxBackground& Background)
+				{
+					if (Background.BackgroundLayers.IsValidIndex(Index))
+					{
+						FOnyxParallaxLayer Layer = Background.BackgroundLayers[Index];
+						Layer.Depth = FMath::Max(Layer.Depth - 1.f, 1.f);
+						Background.BackgroundLayers.Add(Layer);
+					}
+				});
+				SelectLayer(ImageItemOf(Copy));
+				RefreshLayers();
+			})));
+		Menu.AddSeparator();
+		Menu.AddMenuEntry(INVTEXT("Remove Layer"), INVTEXT("Take this picture out of the level (Delete)"), FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Delete"),
+			FUIAction(FExecuteAction::CreateLambda([this, Index]() { RemoveImageLayer(Index); })));
+		return Menu.MakeWidget();
+	}
 	if (Selection.IsEmpty() || *Selection[0] < 0)
 	{
 		return nullptr;
@@ -657,17 +913,361 @@ TSharedPtr<SWidget> SOnyxPainterTool::MakeLayerContextMenu()
 	return Menu.MakeWidget();
 }
 
+TSharedRef<ITableRow> SOnyxPainterTool::GenerateImageLayerRow(int32 LayerIndex, const TSharedPtr<int32>& Item, const TSharedRef<STableViewBase>& Owner)
+{
+	const int32 Index = LayerIndex;
+	const int32 LayerItem = *Item;
+	auto LayerOf = [this, Index]() -> const FOnyxParallaxLayer*
+	{
+		const AOnyxParallaxBackground* Background = FindBackdrop();
+		return Background && Background->BackgroundLayers.IsValidIndex(Index) ? &Background->BackgroundLayers[Index] : nullptr;
+	};
+	auto PictureOf = [LayerOf]() -> UTexture2D*
+	{
+		const FOnyxParallaxLayer* Layer = LayerOf();
+		return Layer && Layer->Material.IsNull() ? Layer->Texture.Get() : nullptr;
+	};
+	// The layer's picture fitted into the row (its shape kept), or a swatch of its colour.
+	TSharedRef<FSlateBrush> Picture = MakeShared<FSlateBrush>();
+	Picture->DrawAs = ESlateBrushDrawType::Image;
+	constexpr float PictureWidth = 32.f;
+	constexpr float PictureHeight = 18.f;
+
+	return SNew(STableRow<TSharedPtr<int32>>, Owner)
+		.Padding(FMargin(4.f, 4.f))
+		.ToolTipText_Lambda([LayerOf]() { const FOnyxParallaxLayer* Layer = LayerOf(); return Layer ? BackdropLayerTooltip(*Layer) : FText::GetEmpty(); })
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SButton)
+				.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+				.ContentPadding(FMargin(2.f))
+				.ToolTipText(INVTEXT("Show / hide (here only: the game still shows it)"))
+				.OnClicked_Lambda([this, LayerItem]() { ToggleLayerVisibility(LayerItem); return FReply::Handled(); })
+				[
+					SNew(SImage).Image_Lambda([this, LayerItem]()
+					{
+						return FOnyxEditorStyle::Get().GetBrush(IsLayerVisible(LayerItem) ? "Onyx2D.Eye.Small" : "Onyx2D.EyeOff.Small");
+					})
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6.f, 0.f)
+			[
+				SNew(SBox).WidthOverride(PictureWidth).HeightOverride(PictureHeight)
+				[
+					SNew(SOverlay)
+					+ SOverlay::Slot()
+					[
+						SNew(SImage)
+						.Image(FAppStyle::GetBrush("WhiteBrush"))
+						.Visibility_Lambda([PictureOf]() { return PictureOf() ? EVisibility::Collapsed : EVisibility::Visible; })
+						.ColorAndOpacity_Lambda([LayerOf]()
+						{
+							const FOnyxParallaxLayer* Layer = LayerOf();
+							return FSlateColor(Layer ? FLinearColor(Layer->Tint.R, Layer->Tint.G, Layer->Tint.B, 1.f) : FLinearColor::Black);
+						})
+					]
+					+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
+					[
+						SNew(SImage)
+						.Visibility_Lambda([PictureOf]() { return PictureOf() ? EVisibility::Visible : EVisibility::Collapsed; })
+						.Image_Lambda([PictureOf, Picture]() -> const FSlateBrush*
+						{
+							UTexture2D* Texture = PictureOf();
+							if (Texture && Picture->GetResourceObject() != Texture)
+							{
+								Picture->SetResourceObject(Texture);
+							}
+							const FVector2D Size(FMath::Max(Texture ? Texture->GetSurfaceWidth() : 1.f, 1.f), FMath::Max(Texture ? Texture->GetSurfaceHeight() : 1.f, 1.f));
+							const double Scale = FMath::Min(PictureWidth / Size.X, PictureHeight / Size.Y);
+							Picture->ImageSize = Size * Scale;
+							return &Picture.Get();
+						})
+					]
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				SNew(SInlineEditableTextBlock)
+				.Text_Lambda([LayerOf]() { const FOnyxParallaxLayer* Layer = LayerOf(); return Layer ? FText::FromName(Layer->Name) : FText::GetEmpty(); })
+				.Font(Font(9, true))
+				.OnTextCommitted_Lambda([this, Index](const FText& Text, ETextCommit::Type)
+				{
+					EditBackdrop(INVTEXT("Rename Image Layer"), [Index, Name = FName(*Text.ToString())](AOnyxParallaxBackground& Background)
+					{
+						if (Background.BackgroundLayers.IsValidIndex(Index))
+						{
+							Background.BackgroundLayers[Index].Name = Name;
+						}
+					});
+				})
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6.f, 0.f, 2.f, 0.f)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([LayerOf]() { const FOnyxParallaxLayer* Layer = LayerOf(); return Layer ? BackdropLayerKind(*Layer) : FText::GetEmpty(); })
+				.Font(Font(8))
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			]
+		];
+}
+
+TSharedRef<SWidget> SOnyxPainterTool::MakeImageLayerPanel()
+{
+	auto Row = [](const FText& Label, const FText& Tooltip, const TSharedRef<SWidget>& Content)
+	{
+		return SNew(SHorizontalBox)
+			.ToolTipText(Tooltip)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(92.f)[SNew(STextBlock).Text(Label)]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				Content
+			];
+	};
+	// A number: dragged (one undo step for the whole drag, the map following it) or typed.
+	auto Number = [this](float Min, float Max, float Delta, TFunction<float(const FOnyxParallaxLayer&)> Get, TFunction<void(FOnyxParallaxLayer&, float)> Set, FText Title)
+	{
+		return SNew(SSpinBox<float>)
+			.MinValue(Min)
+			.MaxValue(Max)
+			.Delta(Delta)
+			.Value_Lambda([this, Get]() { const FOnyxParallaxLayer* Layer = GetImageLayer(ActiveImageLayer); return Layer ? Get(*Layer) : 0.f; })
+			.OnBeginSliderMovement_Lambda([this, Title]() { BeginImageLayerChange(Title); })
+			.OnValueChanged_Lambda([this, Set](float Value)
+			{
+				if (ImageChange)
+				{
+					ApplyImageLayerLive([&Set, Value](FOnyxParallaxLayer& Layer) { Set(Layer, Value); });
+				}
+			})
+			.OnEndSliderMovement_Lambda([this](float) { EndImageLayerChange(); })
+			.OnValueCommitted_Lambda([this, Set, Title](float Value, ETextCommit::Type)
+			{
+				if (ImageChange)
+				{
+					ApplyImageLayerLive([&Set, Value](FOnyxParallaxLayer& Layer) { Set(Layer, Value); });
+				}
+				else
+				{
+					EditImageLayer(Title, [&Set, Value](FOnyxParallaxLayer& Layer) { Set(Layer, Value); });
+				}
+			});
+	};
+	auto HasPicture = [this]() { const FOnyxParallaxLayer* Layer = GetImageLayer(ActiveImageLayer); return Layer && Layer->Texture && Layer->Material.IsNull(); };
+
+	return SNew(SScrollBox)
+		+ SScrollBox::Slot().Padding(10.f, 8.f, 10.f, 4.f)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 10.f)
+			[
+				Hint(INVTEXT("A picture behind the tiles. Drag it on the map to move it, drag a corner to resize it. Drop more textures on the map for more layers."))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f)
+			[
+				Row(INVTEXT("Picture"), INVTEXT("The texture it shows (none: a plain colour band)"),
+					SNew(SObjectPropertyEntryBox)
+					.AllowedClass(UTexture2D::StaticClass())
+					.DisplayThumbnail(false)
+					.AllowCreate(false)
+					.ObjectPath_Lambda([this]() { const FOnyxParallaxLayer* Layer = GetImageLayer(ActiveImageLayer); return Layer && Layer->Texture ? Layer->Texture->GetPathName() : FString(); })
+					.OnObjectChanged_Lambda([this](const FAssetData& Asset)
+					{
+						UTexture2D* Texture = Cast<UTexture2D>(Asset.GetAsset());
+						const FOnyxParallaxLayer* Layer = GetImageLayer(ActiveImageLayer);
+						const float Scale = Layer && Layer->Texture ? GetImageLayerScale(*Layer) : 1.f;
+						const double CmPerPixel = GetCmPerMapPixel();
+						EditImageLayer(INVTEXT("Set Image Layer Picture"), [Texture, Scale, CmPerPixel](FOnyxParallaxLayer& Edited)
+						{
+							Edited.Texture = Texture;
+							if (Texture && CmPerPixel > 0.0)
+							{
+								Edited.Height = float(Texture->GetImportedSize().Y * CmPerPixel * Scale); // the same size per pixel as before
+							}
+						});
+					}))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f)
+			[
+				SNew(SBox)
+				.Visibility_Lambda([HasPicture]() { return HasPicture() ? EVisibility::Visible : EVisibility::Collapsed; })
+				[
+					Row(INVTEXT("Size"), INVTEXT("1 = its pixels as big as the map's; 2 = twice as big"),
+						Number(0.05f, 32.f, 0.05f,
+							[this](const FOnyxParallaxLayer& Layer) { return GetImageLayerScale(Layer); },
+							[this](FOnyxParallaxLayer& Layer, float Value)
+							{
+								const double CmPerPixel = GetCmPerMapPixel();
+								if (Layer.Texture && CmPerPixel > 0.0)
+								{
+									Layer.Height = FMath::Max(float(Layer.Texture->GetImportedSize().Y * CmPerPixel * Value), 1.f);
+								}
+							}, INVTEXT("Resize Image Layer")))
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f)
+			[
+				SNew(SBox)
+				.Visibility_Lambda([HasPicture]() { return HasPicture() ? EVisibility::Collapsed : EVisibility::Visible; })
+				[
+					Row(INVTEXT("Height (m)"), INVTEXT("How tall the band is"),
+						Number(0.5f, 1000.f, 0.5f,
+							[](const FOnyxParallaxLayer& Layer) { return Layer.Height / 100.f; },
+							[](FOnyxParallaxLayer& Layer, float Value) { Layer.Height = FMath::Max(Value * 100.f, 1.f); }, INVTEXT("Resize Image Layer")))
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f)
+			[
+				SNew(SBox)
+				.Visibility_Lambda([HasPicture]() { return HasPicture() ? EVisibility::Visible : EVisibility::Collapsed; })
+				[
+					Row(INVTEXT("Repeat"), INVTEXT("Repeat the picture sideways across the level (a skyline). Off: once, where you put it."),
+						SNew(SCheckBox)
+						.IsChecked_Lambda([this]() { const FOnyxParallaxLayer* Layer = GetImageLayer(ActiveImageLayer); return Layer && Layer->bRepeat ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+						.OnCheckStateChanged_Lambda([this](ECheckBoxState State)
+						{
+							EditImageLayer(INVTEXT("Repeat Image Layer"), [State](FOnyxParallaxLayer& Layer) { Layer.bRepeat = State == ECheckBoxState::Checked; });
+						}))
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 10.f, 0.f, 3.f)
+			[
+				SNew(STextBlock).Text(INVTEXT("Parallax")).Font(Font(9, true))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f)
+			[
+				Row(INVTEXT("Sideways"), INVTEXT("How much it follows the camera sideways: 0 = moves with the level, 1 = stays on screen (a sky). Far things: high."),
+					Number(0.f, 1.f, 0.01f,
+						[](const FOnyxParallaxLayer& Layer) { return float(Layer.Factor.X); },
+						[](FOnyxParallaxLayer& Layer, float Value) { Layer.Factor.X = Value; }, INVTEXT("Image Layer Parallax")))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f)
+			[
+				Row(INVTEXT("Up and down"), INVTEXT("How much it follows the camera up and down: 0 = moves with the level, 1 = stays on screen."),
+					Number(0.f, 1.f, 0.01f,
+						[](const FOnyxParallaxLayer& Layer) { return float(Layer.Factor.Y); },
+						[](FOnyxParallaxLayer& Layer, float Value) { Layer.Factor.Y = Value; }, INVTEXT("Image Layer Parallax")))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 10.f, 0.f, 3.f)
+			[
+				SNew(STextBlock).Text(INVTEXT("Look")).Font(Font(9, true))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f)
+			[
+				Row(INVTEXT("Colour"), INVTEXT("Tints the picture (white = as drawn); its alpha fades it. The level's mood tints it too."),
+					SNew(SColorBlock)
+					.Color_Lambda([this]() { const FOnyxParallaxLayer* Layer = GetImageLayer(ActiveImageLayer); return Layer ? Layer->Tint : FLinearColor::White; })
+					.ShowBackgroundForAlpha(true)
+					.AlphaDisplayMode(EColorBlockAlphaDisplayMode::Separate)
+					.Size(FVector2D(120.f, 18.f))
+					.OnMouseButtonDown_Lambda([this](const FGeometry&, const FPointerEvent&)
+					{
+						const FOnyxParallaxLayer* Layer = GetImageLayer(ActiveImageLayer);
+						if (!Layer)
+						{
+							return FReply::Handled();
+						}
+						BeginImageLayerChange(INVTEXT("Image Layer Colour"));
+						FColorPickerArgs Picker(Layer->Tint, FOnLinearColorValueChanged::CreateLambda([this](FLinearColor Color)
+						{
+							ApplyImageLayerLive([Color](FOnyxParallaxLayer& Edited) { Edited.Tint = Color; });
+						}));
+						Picker.bUseAlpha = true;
+						Picker.OnColorPickerCancelled = FOnColorPickerCancelled::CreateLambda([this](FLinearColor Original)
+						{
+							ApplyImageLayerLive([Original](FOnyxParallaxLayer& Edited) { Edited.Tint = Original; });
+						});
+						Picker.OnColorPickerWindowClosed = FOnWindowClosed::CreateLambda([this](const TSharedRef<SWindow>&) { EndImageLayerChange(); });
+						OpenColorPicker(Picker);
+						return FReply::Handled();
+					}))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f)
+			[
+				Row(INVTEXT("Below (m)"), INVTEXT("Carries the picture's bottom row on down this far, so a skyline still reaches below the ground when the camera rises."),
+					Number(0.f, 200.f, 0.5f,
+						[](const FOnyxParallaxLayer& Layer) { return Layer.ExtendBelow / 100.f; },
+						[](FOnyxParallaxLayer& Layer, float Value) { Layer.ExtendBelow = FMath::Max(Value * 100.f, 0.f); }, INVTEXT("Image Layer Below")))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f)
+			[
+				Row(INVTEXT("In the game"), INVTEXT("Off: the game doesn't draw it (it stays here, dimmed out of the map)."),
+					SNew(SCheckBox)
+					.IsChecked_Lambda([this]() { const FOnyxParallaxLayer* Layer = GetImageLayer(ActiveImageLayer); return Layer && Layer->bVisible ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+					.OnCheckStateChanged_Lambda([this](ECheckBoxState State)
+					{
+						EditImageLayer(INVTEXT("Show Image Layer"), [State](FOnyxParallaxLayer& Layer) { Layer.bVisible = State == ECheckBoxState::Checked; });
+					}))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 12.f, 0.f, 3.f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 0.f, 4.f, 0.f)
+				[
+					SNew(SButton)
+					.HAlign(HAlign_Center)
+					.ToolTipText(INVTEXT("Put it in the middle of the view"))
+					.OnClicked_Lambda([this]()
+					{
+						AOnyxParallaxBackground* Background = FindBackdrop();
+						const FOnyxParallaxLayer* Layer = GetImageLayer(ActiveImageLayer);
+						if (Background && Layer && Canvas.IsValid())
+						{
+							const FVector Shown = Painter.MapPixelsToWorld(Canvas->GetViewCenterMapPixels());
+							const FVector Delta = Canvas->GetParallaxCameraDelta();
+							const FVector Anchor = Background->GetActorLocation();
+							const FVector2D Offset(Shown.X - Delta.X * Layer->Factor.X - Anchor.X, Shown.Z - Delta.Z * Layer->Factor.Y - Anchor.Z);
+							EditImageLayer(INVTEXT("Move Image Layer"), [Offset](FOnyxParallaxLayer& Edited) { Edited.OffsetX = Offset.X; Edited.OffsetZ = Offset.Y; });
+						}
+						return FReply::Handled();
+					})
+					[
+						SNew(STextBlock).Text(INVTEXT("To the View"))
+					]
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f)
+				[
+					SNew(SButton)
+					.HAlign(HAlign_Center)
+					.ToolTipText(INVTEXT("Take this picture out of the level (Delete)"))
+					.OnClicked_Lambda([this]() { RemoveImageLayer(ActiveImageLayer); return FReply::Handled(); })
+					[
+						SNew(STextBlock).Text(INVTEXT("Remove"))
+					]
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f)
+			[
+				SNew(SButton)
+				.HAlign(HAlign_Center)
+				.Visibility_Lambda([this, HasPicture]() { const FOnyxParallaxLayer* Layer = GetImageLayer(ActiveImageLayer); return Layer && (Layer->bRepeat || !HasPicture()) ? EVisibility::Visible : EVisibility::Collapsed; })
+				.ToolTipText(INVTEXT("Repeating layers and colour bands as wide as the level plus a screen on each side, so they cover the view wherever the camera goes"))
+				.OnClicked_Lambda([this]() { FitBackdropToLevel(); return FReply::Handled(); })
+				[
+					SNew(STextBlock).Text(INVTEXT("Across the Whole Level"))
+				]
+			]
+		];
+}
+
 TSharedRef<SWidget> SOnyxPainterTool::MakeCanvasArea()
 {
 	SAssignNew(Canvas, SOnyxMapCanvas)
 		.Painter(&Painter)
 		.ShowGrid_Lambda([this]() { return bShowGrid; })
 		.ShowCollision_Lambda([this]() { return bShowCollision; })
+		.ShowParallax_Lambda([this]() { return bShowParallax; })
+		.SelectedImageLayer_Lambda([this]() { return ActiveImageLayer; })
+		.HiddenImageLayers_Lambda([this]() { return HiddenImageLayers; })
 		.HiddenObjectLayers_Lambda([this]() { return HiddenObjectLayers; })
 		.HiddenLayers_Lambda([this]() { return HiddenLayers; })
 		.PreviewStamp_Lambda([this]()
 		{
-			const bool bShow = !IsObjectLayer() && (Tool == EOnyxPaintTool::Brush || Tool == EOnyxPaintTool::Fill);
+			const bool bShow = !IsObjectLayer() && !IsImageLayer() && (Tool == EOnyxPaintTool::Brush || Tool == EOnyxPaintTool::Fill);
 			return bShow ? Stamp : FOnyxStamp();
 		})
 		.PreviewBrush_Lambda([this]() { return IsObjectLayer() && Tool == EOnyxPaintTool::Brush ? SelectedBrush : nullptr; })
@@ -681,7 +1281,25 @@ TSharedRef<SWidget> SOnyxPainterTool::MakeCanvasArea()
 	return SNew(SOverlay)
 		+ SOverlay::Slot()
 		[
-			Canvas.ToSharedRef()
+			// Textures dropped on the map become image layers, their middle where they are dropped.
+			SNew(SAssetDropTarget)
+			.bSupportsMultiDrop(true)
+			.OnAreAssetsAcceptableForDrop_Lambda([this](TArrayView<FAssetData> Assets) { return Painter.FindMapActor() && Assets.ContainsByPredicate(IsTextureAsset); })
+			.OnAssetsDropped_Lambda([this](const FDragDropEvent& Event, TArrayView<FAssetData> Assets)
+			{
+				TArray<UTexture2D*> Textures;
+				for (const FAssetData& Asset : Assets)
+				{
+					if (UTexture2D* Texture = Cast<UTexture2D>(Asset.GetAsset()))
+					{
+						Textures.Add(Texture);
+					}
+				}
+				AddImageLayers(Textures, Canvas->LocalToMapPixels(Canvas->GetCachedGeometry().AbsoluteToLocal(Event.GetScreenSpacePosition())));
+			})
+			[
+				Canvas.ToSharedRef()
+			]
 		]
 		+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Bottom).Padding(10.f)
 		[
@@ -1034,11 +1652,17 @@ void SOnyxPainterTool::RefreshLayers()
 			LayerItems.Add(MakeShared<int32>(Index));
 		}
 		LayerItems.Add(MakeShared<int32>(BackgroundItem));
+		// Behind it all: the image layers, nearest first.
+		for (const int32 Index : BackdropOrder(FindBackdrop()))
+		{
+			LayerItems.Add(MakeShared<int32>(ImageItemOf(Index)));
+		}
 	}
 	if (LayerList.IsValid())
 	{
 		LayerList->RequestListRefresh();
-		const int32 Active = ActiveObjectLayer == FOnyxBrushLibrary::EntitiesLayer ? EntitiesItem
+		const int32 Active = IsImageLayer() ? ImageItemOf(ActiveImageLayer)
+			: ActiveObjectLayer == FOnyxBrushLibrary::EntitiesLayer ? EntitiesItem
 			: ActiveObjectLayer == FOnyxBrushLibrary::DecorLayer ? DecorItem
 			: ActiveObjectLayer == FOnyxBrushLibrary::BackgroundLayer ? BackgroundItem
 			: Painter.GetLayer();
@@ -1047,6 +1671,343 @@ void SOnyxPainterTool::RefreshLayers()
 			LayerList->SetSelection(*Item, ESelectInfo::Direct);
 		}
 	}
+}
+
+// --- Backdrop ------------------------------------------------------------------------
+
+AOnyxParallaxBackground* SOnyxPainterTool::FindBackdrop() const
+{
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	AOnyxParallaxBackground* Background = BackdropActor.Get();
+	if (Background && Background->GetWorld() == World)
+	{
+		return Background;
+	}
+	Background = nullptr;
+	if (World)
+	{
+		TActorIterator<AOnyxParallaxBackground> It(World);
+		Background = It ? *It : nullptr;
+	}
+	BackdropActor = Background;
+	return Background;
+}
+
+AOnyxParallaxBackground* SOnyxPainterTool::CreateBackdrop()
+{
+	if (AOnyxParallaxBackground* Existing = FindBackdrop())
+	{
+		return Existing;
+	}
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		return nullptr;
+	}
+	const FScopedTransaction Transaction(INVTEXT("Add Backdrop"));
+	// Behind the middle of the map (on its plane: the layers keep their own distance behind it).
+	FVector Location = FVector::ZeroVector;
+	if (Painter.FindMapActor())
+	{
+		const FIntPoint Size = Painter.GetMapSize();
+		const FIntPoint Tile = Painter.GetTileSize();
+		Location = Painter.MapPixelsToWorld(FVector2D(Size.X * Tile.X, Size.Y * Tile.Y) * 0.5);
+	}
+	FActorSpawnParameters Params;
+	Params.ObjectFlags |= RF_Transactional;
+	AOnyxParallaxBackground* Background = World->SpawnActor<AOnyxParallaxBackground>(Location, FRotator::ZeroRotator, Params);
+	if (!Background)
+	{
+		return nullptr;
+	}
+	Background->SetActorLabel(TEXT("Backdrop"));
+	Background->SetFolderPath(TEXT("Level/Backdrop"));
+	Background->BackgroundLayers.Reset(); // only the layers you add
+	BackdropActor = Background;
+	if (Painter.FindMapActor())
+	{
+		FitBackdropToLevel();
+	}
+	Background->RerunConstructionScripts();
+	return Background;
+}
+
+double SOnyxPainterTool::GetCmPerMapPixel() const
+{
+	return Painter.FindMapActor() ? (Painter.MapPixelsToWorld(FVector2D(1.0, 0.0)) - Painter.MapPixelsToWorld(FVector2D::ZeroVector)).Size() : 0.0;
+}
+
+FOnyxParallaxLayer* SOnyxPainterTool::GetImageLayer(int32 LayerIndex) const
+{
+	AOnyxParallaxBackground* Background = FindBackdrop();
+	return Background && Background->BackgroundLayers.IsValidIndex(LayerIndex) ? &Background->BackgroundLayers[LayerIndex] : nullptr;
+}
+
+TArray<UTexture2D*> SOnyxPainterTool::GetSelectedTextures() const
+{
+	TArray<FAssetData> Selection;
+	FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser").Get().GetSelectedAssets(Selection);
+	TArray<UTexture2D*> Textures;
+	for (const FAssetData& Asset : Selection)
+	{
+		if (UTexture2D* Texture = Cast<UTexture2D>(Asset.GetAsset()))
+		{
+			Textures.Add(Texture);
+		}
+	}
+	return Textures;
+}
+
+int32 SOnyxPainterTool::AddImageLayer(UTexture2D* Texture, TOptional<FVector2D> AtMapPixels)
+{
+	AOnyxParallaxBackground* Background = FindBackdrop() ? FindBackdrop() : CreateBackdrop();
+	if (!Background || !Canvas.IsValid())
+	{
+		return INDEX_NONE;
+	}
+	// In front of the nearest image layer so far, a little nearer and following the camera a little less.
+	const FOnyxParallaxLayer* Nearest = nullptr;
+	for (const FOnyxParallaxLayer& Layer : Background->BackgroundLayers)
+	{
+		Nearest = !Nearest || Layer.Depth < Nearest->Depth ? &Layer : Nearest;
+	}
+	FOnyxParallaxLayer Layer;
+	Layer.Name = Texture ? FName(*Texture->GetName()) : FName(TEXT("Colour"));
+	Layer.Texture = Texture;
+	Layer.bRepeat = Texture == nullptr; // a picture goes where you put it; a colour band spans the level
+	Layer.Depth = Nearest ? FMath::Max(Nearest->Depth * 0.75f, 30.f) : 2000.f;
+	Layer.Factor = Nearest ? FVector2D(FMath::Max(Nearest->Factor.X - 0.15, 0.05), FMath::Max(Nearest->Factor.Y - 0.15, 0.05)) : FVector2D(0.8, 0.8);
+	const double CmPerPixel = GetCmPerMapPixel();
+	if (Texture)
+	{
+		Layer.Height = CmPerPixel > 0.0 ? FMath::Max(float(Texture->GetImportedSize().Y * CmPerPixel), 50.f) : 1200.f; // its pixels as big as the map's
+	}
+	else
+	{
+		Layer.Tint = FLinearColor(0.05f, 0.06f, 0.09f);
+		Layer.Height = 3000.f;
+	}
+	// Its middle under the drop (or in the middle of the view), as the view shows it now.
+	const FVector Shown = Painter.MapPixelsToWorld(AtMapPixels.IsSet() ? *AtMapPixels : Canvas->GetViewCenterMapPixels());
+	const FVector Delta = Canvas->GetParallaxCameraDelta();
+	const FVector Anchor = Background->GetActorLocation();
+	Layer.OffsetX = float(Shown.X - Delta.X * Layer.Factor.X - Anchor.X);
+	Layer.OffsetZ = float(Shown.Z - Delta.Z * Layer.Factor.Y - Anchor.Z);
+	const int32 Added = Background->BackgroundLayers.Num();
+	EditBackdrop(INVTEXT("Add Image Layer"), [&Layer](AOnyxParallaxBackground& Edited) { Edited.BackgroundLayers.Add(Layer); });
+	return Added;
+}
+
+void SOnyxPainterTool::AddImageLayers(const TArray<UTexture2D*>& Textures, TOptional<FVector2D> AtMapPixels)
+{
+	if (!Painter.FindMapActor())
+	{
+		Notify(INVTEXT("Place the tile map in the level first (banner at the top of the map)."), false);
+		return;
+	}
+	const FScopedTransaction Transaction(INVTEXT("Add Image Layers"));
+	int32 Last = INDEX_NONE;
+	if (Textures.IsEmpty())
+	{
+		Last = AddImageLayer(nullptr, AtMapPixels);
+	}
+	for (UTexture2D* Texture : Textures)
+	{
+		Last = AddImageLayer(Texture, AtMapPixels);
+	}
+	if (Last != INDEX_NONE)
+	{
+		SelectLayer(ImageItemOf(Last));
+		RefreshLayers();
+	}
+}
+
+void SOnyxPainterTool::RemoveImageLayer(int32 LayerIndex)
+{
+	if (!GetImageLayer(LayerIndex))
+	{
+		return;
+	}
+	EditBackdrop(INVTEXT("Remove Image Layer"), [LayerIndex](AOnyxParallaxBackground& Background) { Background.BackgroundLayers.RemoveAt(LayerIndex); });
+	HiddenImageLayers.Reset();
+	if (ActiveImageLayer == LayerIndex)
+	{
+		SelectLayer(Painter.GetLayer());
+	}
+	RefreshLayers();
+}
+
+float SOnyxPainterTool::GetImageLayerScale(const FOnyxParallaxLayer& Layer) const
+{
+	const double CmPerPixel = GetCmPerMapPixel();
+	const int32 Pixels = Layer.Texture ? Layer.Texture->GetImportedSize().Y : 0;
+	return Pixels > 0 && CmPerPixel > 0.0 ? float(Layer.Height / (Pixels * CmPerPixel)) : 1.f;
+}
+
+void SOnyxPainterTool::EditImageLayer(const FText& Title, TFunctionRef<void(FOnyxParallaxLayer&)> Edit)
+{
+	const int32 Index = ActiveImageLayer;
+	EditBackdrop(Title, [Index, &Edit](AOnyxParallaxBackground& Background)
+	{
+		if (Background.BackgroundLayers.IsValidIndex(Index))
+		{
+			Edit(Background.BackgroundLayers[Index]);
+		}
+	});
+}
+
+void SOnyxPainterTool::BeginImageLayerChange(const FText& Title)
+{
+	if (AOnyxParallaxBackground* Background = FindBackdrop())
+	{
+		ImageChange = MakeUnique<FScopedTransaction>(Title);
+		Background->Modify();
+	}
+}
+
+void SOnyxPainterTool::ApplyImageLayerLive(TFunctionRef<void(FOnyxParallaxLayer&)> Edit)
+{
+	AOnyxParallaxBackground* Background = FindBackdrop();
+	if (Background && Background->BackgroundLayers.IsValidIndex(ActiveImageLayer))
+	{
+		Edit(Background->BackgroundLayers[ActiveImageLayer]);
+		Background->RerunConstructionScripts();
+	}
+}
+
+void SOnyxPainterTool::EndImageLayerChange()
+{
+	ImageChange.Reset();
+}
+
+int32 SOnyxPainterTool::GetImageCornerAt(const FVector2D& MapPixels) const
+{
+	const TOptional<FBox2D> Rect = Canvas.IsValid() && IsImageLayer() ? Canvas->GetImageLayerRect(ActiveImageLayer) : TOptional<FBox2D>();
+	if (!Rect.IsSet())
+	{
+		return 0;
+	}
+	const double Reach = 9.0 / FMath::Max(Canvas->GetZoom(), 0.01f); // screen pixels around each handle
+	const FVector2D Corners[] = { Rect->Min, FVector2D(Rect->Max.X, Rect->Min.Y), Rect->Max, FVector2D(Rect->Min.X, Rect->Max.Y) };
+	for (int32 Corner = 0; Corner < 4; ++Corner)
+	{
+		if (FMath::Abs(MapPixels.X - Corners[Corner].X) <= Reach && FMath::Abs(MapPixels.Y - Corners[Corner].Y) <= Reach)
+		{
+			return Corner + 1;
+		}
+	}
+	return 0;
+}
+
+void SOnyxPainterTool::FitBackdropToLevel()
+{
+	AOnyxParallaxBackground* Background = FindBackdrop();
+	const double CmPerPixel = GetCmPerMapPixel();
+	if (!Background || CmPerPixel <= 0.0)
+	{
+		Notify(INVTEXT("Needs a tile map in the level."), false);
+		return;
+	}
+	const FIntPoint Size = Painter.GetMapSize();
+	const FIntPoint Tile = Painter.GetTileSize();
+	const FVector2D MapPixels(Size.X * Tile.X, Size.Y * Tile.Y);
+	const FVector Middle = Painter.MapPixelsToWorld(MapPixels * 0.5);
+	const double MapWidth = MapPixels.X * CmPerPixel;
+	// A layer is never more than half the level away from the view's middle, wherever it scrolls; a screen on each side more.
+	const float Width = float(MapWidth + 6000.0);
+	EditBackdrop(INVTEXT("Fit Backdrop to Level"), [Middle, Width](AOnyxParallaxBackground& Edited)
+	{
+		Edited.SetActorLocation(FVector(Middle.X, Edited.GetActorLocation().Y, Edited.GetActorLocation().Z));
+		Edited.TotalWidth = Width;
+	});
+	Notify(FText::Format(INVTEXT("The backdrop covers the level: {0} m wide."), FText::AsNumber(FMath::RoundToInt(Width / 100.f))), true);
+}
+
+void SOnyxPainterTool::EditBackdrop(const FText& Title, TFunctionRef<void(AOnyxParallaxBackground&)> Edit)
+{
+	AOnyxParallaxBackground* Background = FindBackdrop();
+	if (!Background)
+	{
+		return;
+	}
+	const FScopedTransaction Transaction(Title);
+	Background->Modify();
+	Edit(*Background);
+	Background->RerunConstructionScripts();
+	if (SelectedActor.Get() == Background && Inspector.IsValid())
+	{
+		Inspector->ForceRefresh();
+	}
+}
+
+// Console hooks for scripted screenshots (no mouse): named, unity builds merge files.
+namespace OnyxPainterConsole
+{
+	FString PendingLayer;
+	FString PendingImage;
+	FIntPoint PendingImageCell(INDEX_NONE, INDEX_NONE);
+
+	FAutoConsoleCommand SelectLayerCommand(TEXT("Onyx2D.PainterSelectLayer"),
+		TEXT("Selects a layer of the Level Painter by its name: Onyx2D.PainterSelectLayer <name>."),
+		FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args) { PendingLayer = FString::Join(Args, TEXT(" ")); }));
+
+	FAutoConsoleCommand AddImageCommand(TEXT("Onyx2D.PainterAddImage"),
+		TEXT("Adds a texture as an image layer in the Level Painter: Onyx2D.PainterAddImage <texture path> [column row]."),
+		FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+		{
+			PendingImage = Args.IsEmpty() ? FString() : Args[0];
+			PendingImageCell = Args.Num() >= 3 ? FIntPoint(FCString::Atoi(*Args[1]), FCString::Atoi(*Args[2])) : FIntPoint(INDEX_NONE, INDEX_NONE);
+		}));
+}
+
+EActiveTimerReturnType SOnyxPainterTool::PollBackdrop(double, float)
+{
+	if (!OnyxPainterConsole::PendingImage.IsEmpty() && Painter.GetTileMap())
+	{
+		UTexture2D* Texture = LoadObject<UTexture2D>(nullptr, *OnyxPainterConsole::PendingImage);
+		const FIntPoint Cell = OnyxPainterConsole::PendingImageCell;
+		const FIntPoint Tile = Painter.GetTileSize();
+		OnyxPainterConsole::PendingImage.Reset();
+		if (Texture)
+		{
+			AddImageLayers({ Texture }, Painter.IsValidCell(Cell) ? TOptional<FVector2D>(FVector2D((Cell.X + 0.5) * Tile.X, (Cell.Y + 0.5) * Tile.Y)) : TOptional<FVector2D>());
+		}
+	}
+	if (!OnyxPainterConsole::PendingLayer.IsEmpty() && Painter.GetTileMap())
+	{
+		const FString Wanted = OnyxPainterConsole::PendingLayer;
+		OnyxPainterConsole::PendingLayer.Reset();
+		RefreshLayers();
+		if (const TSharedPtr<int32>* Item = LayerItems.FindByPredicate([this, &Wanted](const TSharedPtr<int32>& I) { return GetLayerTitle(*I).ToString().Equals(Wanted, ESearchCase::IgnoreCase); }))
+		{
+			SelectLayer(**Item);
+			RefreshLayers();
+		}
+	}
+	// The image layers in the list as the level has them (added, removed or moved in the Details panel, an undo, another level).
+	if (!Painter.GetTileMap() || bDraggingImage || ImageChange)
+	{
+		return EActiveTimerReturnType::Continue;
+	}
+	if (IsImageLayer() && !GetImageLayer(ActiveImageLayer))
+	{
+		SelectLayer(Painter.GetLayer());
+		RefreshLayers();
+		return EActiveTimerReturnType::Continue;
+	}
+	TArray<int32> Listed;
+	for (const TSharedPtr<int32>& Item : LayerItems)
+	{
+		if (IsImageItem(*Item))
+		{
+			Listed.Add(ImageIndexOf(*Item));
+		}
+	}
+	if (Listed != BackdropOrder(FindBackdrop()))
+	{
+		RefreshLayers();
+	}
+	return EActiveTimerReturnType::Continue;
 }
 
 void SOnyxPainterTool::RefreshBrushes()
@@ -1075,7 +2036,13 @@ void SOnyxPainterTool::RefreshBrushes()
 
 void SOnyxPainterTool::SelectLayer(int32 LayerItem)
 {
+	ActiveImageLayer = IsImageItem(LayerItem) ? ImageIndexOf(LayerItem) : INDEX_NONE;
 	ActiveObjectLayer = ObjectLayerOf(LayerItem);
+	if (IsImageLayer())
+	{
+		RectStart.Reset();
+		return;
+	}
 	if (!IsObjectLayer())
 	{
 		Painter.SetLayer(LayerItem);
@@ -1100,7 +2067,19 @@ void SOnyxPainterTool::SelectActor(AActor* Actor)
 
 void SOnyxPainterTool::ToggleLayerVisibility(int32 LayerItem)
 {
-	if (LayerItem < 0)
+	if (IsImageItem(LayerItem))
+	{
+		const int32 Index = ImageIndexOf(LayerItem);
+		if (HiddenImageLayers.Contains(Index))
+		{
+			HiddenImageLayers.Remove(Index);
+		}
+		else
+		{
+			HiddenImageLayers.Add(Index);
+		}
+	}
+	else if (LayerItem < 0)
 	{
 		const FName Layer = ObjectLayerOf(LayerItem);
 		if (HiddenObjectLayers.Contains(Layer))
@@ -1124,6 +2103,10 @@ void SOnyxPainterTool::ToggleLayerVisibility(int32 LayerItem)
 
 bool SOnyxPainterTool::IsLayerVisible(int32 LayerItem) const
 {
+	if (IsImageItem(LayerItem))
+	{
+		return !HiddenImageLayers.Contains(ImageIndexOf(LayerItem));
+	}
 	return LayerItem < 0 ? !HiddenObjectLayers.Contains(ObjectLayerOf(LayerItem)) : !HiddenLayers.Contains(LayerItem);
 }
 
@@ -1273,6 +2256,21 @@ FIntRect SOnyxPainterTool::GetDraggedArea(const FIntPoint& Cell) const
 
 TOptional<EMouseCursor::Type> SOnyxPainterTool::GetCursorFor(FVector2D MapPixels) const
 {
+	if (IsImageLayer())
+	{
+		// The image layer being edited: its corners resize it, its picture moves it; elsewhere nothing happens.
+		const int32 Corner = bDraggingImage ? ImageGrabCorner : GetImageCornerAt(MapPixels);
+		if (Corner != 0)
+		{
+			return Corner == 1 || Corner == 3 ? EMouseCursor::ResizeSouthEast : EMouseCursor::ResizeSouthWest;
+		}
+		const TOptional<FBox2D> Picture = Canvas.IsValid() ? Canvas->GetImageLayerRect(ActiveImageLayer) : TOptional<FBox2D>();
+		if (bDraggingImage || (Picture.IsSet() && Picture->IsInsideOrOn(MapPixels)))
+		{
+			return EMouseCursor::CardinalCross;
+		}
+		return {};
+	}
 	if (Tool != EOnyxPaintTool::Select)
 	{
 		return {};
@@ -1402,6 +2400,75 @@ void SOnyxPainterTool::HandleStroke(EOnyxStrokePhase Phase, FIntPoint Cell, bool
 {
 	if (!Painter.GetTileMap())
 	{
+		return;
+	}
+
+	// An image layer: drag it to move it, drag a corner to resize it (the opposite corner stays, the picture keeps its shape).
+	if (IsImageLayer())
+	{
+		const FOnyxParallaxLayer* Layer = GetImageLayer(ActiveImageLayer);
+		if (bSecondary || !Layer)
+		{
+			return;
+		}
+		const FVector2D At = Canvas->GetHoverMapPixels();
+		if (Phase == EOnyxStrokePhase::Begin)
+		{
+			// Only grabbing its picture (or a corner) moves it: a click anywhere else leaves it where it is.
+			const TOptional<FBox2D> Rect = Canvas->GetImageLayerRect(ActiveImageLayer);
+			ImageGrabCorner = GetImageCornerAt(At);
+			if (ImageGrabCorner == 0 && (!Rect.IsSet() || !Rect->IsInsideOrOn(At)))
+			{
+				return;
+			}
+			ImageGrabStart = At;
+			ImageStartRect = Rect.Get(FBox2D(At, At));
+			ImageStartOffset = FVector2D(Layer->OffsetX, Layer->OffsetZ);
+			ImageStartHeight = Layer->Height;
+			bDraggingImage = true;
+			BeginImageLayerChange(ImageGrabCorner != 0 ? INVTEXT("Resize Image Layer") : INVTEXT("Move Image Layer"));
+		}
+		else if (Phase == EOnyxStrokePhase::Move && bDraggingImage)
+		{
+			if (ImageGrabCorner == 0)
+			{
+				const FVector Moved = Painter.MapPixelsToWorld(At) - Painter.MapPixelsToWorld(ImageGrabStart);
+				const FVector2D Start = ImageStartOffset;
+				ApplyImageLayerLive([&Moved, &Start](FOnyxParallaxLayer& Edited)
+				{
+					Edited.OffsetX = float(Start.X + Moved.X);
+					Edited.OffsetZ = float(Start.Y + Moved.Z);
+				});
+			}
+			else
+			{
+				const FVector2D Corners[] = { ImageStartRect.Min, FVector2D(ImageStartRect.Max.X, ImageStartRect.Min.Y), ImageStartRect.Max, FVector2D(ImageStartRect.Min.X, ImageStartRect.Max.Y) };
+				const FVector2D Fixed = Corners[(ImageGrabCorner + 1) % 4]; // the opposite corner
+				const FVector2D StartSize = ImageStartRect.GetSize();
+				const bool bWholePicture = Layer->Texture && Layer->Material.IsNull() && !Layer->bRepeat;
+				const double Aspect = StartSize.Y > 0.0 ? StartSize.X / StartSize.Y : 1.0;
+				// A picture placed once keeps its shape; a repeating one or a colour band only gets taller or shorter.
+				const double NewHeight = FMath::Max(bWholePicture ? FMath::Max(FMath::Abs(At.Y - Fixed.Y), FMath::Abs(At.X - Fixed.X) / Aspect) : FMath::Abs(At.Y - Fixed.Y), 2.0);
+				const double SignX = At.X >= Fixed.X ? 1.0 : -1.0;
+				const double SignY = At.Y >= Fixed.Y ? 1.0 : -1.0;
+				const FVector2D NewMiddle(bWholePicture ? Fixed.X + SignX * NewHeight * Aspect * 0.5 : ImageStartRect.GetCenter().X, Fixed.Y + SignY * NewHeight * 0.5);
+				const FVector Moved = Painter.MapPixelsToWorld(NewMiddle) - Painter.MapPixelsToWorld(ImageStartRect.GetCenter());
+				const float Height = float(ImageStartHeight * NewHeight / FMath::Max(StartSize.Y, 0.001));
+				const FVector2D Start = ImageStartOffset;
+				ApplyImageLayerLive([&Moved, &Start, Height](FOnyxParallaxLayer& Edited)
+				{
+					Edited.Height = FMath::Max(Height, 1.f);
+					Edited.OffsetX = float(Start.X + Moved.X);
+					Edited.OffsetZ = float(Start.Y + Moved.Z);
+				});
+			}
+		}
+		else if (Phase == EOnyxStrokePhase::End && bDraggingImage)
+		{
+			bDraggingImage = false;
+			ImageGrabCorner = 0;
+			EndImageLayerChange();
+		}
 		return;
 	}
 
@@ -1572,6 +2639,11 @@ FReply SOnyxPainterTool::HandleKey(const FKeyEvent& Event)
 		return FReply::Unhandled(); // let the editor handle undo/redo etc.
 	}
 	const FKey Key = Event.GetKey();
+	if (Key == EKeys::Delete && IsImageLayer())
+	{
+		RemoveImageLayer(ActiveImageLayer);
+		return FReply::Handled();
+	}
 	const TPair<FKey, EOnyxPaintTool> ToolKeys[] = {
 		{ EKeys::B, EOnyxPaintTool::Brush }, { EKeys::R, EOnyxPaintTool::Rect }, { EKeys::F, EOnyxPaintTool::Fill },
 		{ EKeys::E, EOnyxPaintTool::Erase }, { EKeys::I, EOnyxPaintTool::Pick }, { EKeys::S, EOnyxPaintTool::Select },
@@ -1779,11 +2851,21 @@ FText SOnyxPainterTool::GetLayerTitle(int32 LayerItem) const
 	{
 		return INVTEXT("Background (behind tiles)");
 	}
+	if (IsImageItem(LayerItem))
+	{
+		const FOnyxParallaxLayer* Layer = GetImageLayer(ImageIndexOf(LayerItem));
+		return Layer ? FText::FromName(Layer->Name) : FText::GetEmpty();
+	}
 	return Painter.GetLayerName(LayerItem);
 }
 
 FText SOnyxPainterTool::GetPaletteTitle() const
 {
+	if (IsImageLayer())
+	{
+		const FOnyxParallaxLayer* Layer = GetImageLayer(ActiveImageLayer);
+		return FText::Format(INVTEXT("Image Layer  ·  {0}"), Layer ? FText::FromName(Layer->Name) : FText::GetEmpty());
+	}
 	if (IsObjectLayer())
 	{
 		return FText::Format(INVTEXT("Objects  ·  {0} layer"), FText::FromName(ActiveObjectLayer));
@@ -1838,14 +2920,41 @@ const FSlateBrush* SOnyxPainterTool::GetBrushThumbnail(const TSharedPtr<FOnyxPai
 	{
 		return Library.GetIcon(*Brush);
 	}
-	// The sprite it shows, animated (flipbooks, characters' Idle clip).
+	// The sprite it shows, animated (flipbooks, characters' Idle clip), cropped to the figure: a character's frame is mostly
+	// empty space, and the whole frame shrunk to the box leaves a speck. One crop for all its frames (worked out once), so
+	// the figure keeps its size while it plays.
+	const FString CropKey = Brush->Id.ToString() + TEXT("|") + Texture->GetPathName();
+	const FIntRect* Crop = ThumbnailCrops.Find(CropKey);
+	if (!Crop)
+	{
+		TArray<FIntRect> Frames;
+		for (int32 Sample = 0; Sample < 120; ++Sample)
+		{
+			UTexture2D* FrameTexture = nullptr;
+			FIntRect Frame;
+			if (Library.GetPreviewSprite(*Brush, FrameTexture, Frame, Sample / 30.0) && FrameTexture == Texture)
+			{
+				Frames.AddUnique(Frame);
+			}
+		}
+		Frames.AddUnique(Rect);
+		const TOptional<FIntRect> Visible = FOnyxImageAnalysis::VisibleBounds(Texture, Frames);
+		Crop = &ThumbnailCrops.Add(CropKey, Visible.IsSet() ? *Visible : FIntRect(FIntPoint::ZeroValue, Rect.Size()));
+	}
+	const FIntRect Shown(Rect.Min + Crop->Min.ComponentMax(FIntPoint::ZeroValue), Rect.Min + Crop->Max.ComponentMin(Rect.Size()));
+	if (Shown.Width() <= 0 || Shown.Height() <= 0)
+	{
+		return Library.GetIcon(*Brush);
+	}
 	TSharedRef<FSlateBrush>& Thumbnail = Thumbnails.FindOrAdd(Brush->Id, MakeShared<FSlateBrush>());
-	const FIntPoint TextureSize = Texture->GetImportedSize();
-	const float Scale = 28.f / FMath::Max(Rect.Width(), Rect.Height());
+	// Measured against the texture as the GPU has it, like the rectangle itself (a padded texture is bigger than the picture).
+	const FVector2f TextureSize(FMath::Max(Texture->GetSurfaceWidth(), 1.f), FMath::Max(Texture->GetSurfaceHeight(), 1.f));
+	constexpr float Box = 36.f;
+	const float Scale = Box / FMath::Max(Shown.Width(), Shown.Height());
 	Thumbnail->SetResourceObject(Texture);
 	Thumbnail->DrawAs = ESlateBrushDrawType::Image;
-	Thumbnail->ImageSize = FVector2D(Rect.Width() * Scale, Rect.Height() * Scale);
-	Thumbnail->SetUVRegion(FBox2f(FVector2f(float(Rect.Min.X) / TextureSize.X, float(Rect.Min.Y) / TextureSize.Y),
-		FVector2f(float(Rect.Max.X) / TextureSize.X, float(Rect.Max.Y) / TextureSize.Y)));
+	Thumbnail->ImageSize = FVector2D(Shown.Width() * Scale, Shown.Height() * Scale);
+	Thumbnail->SetUVRegion(FBox2f(FVector2f(Shown.Min.X / TextureSize.X, Shown.Min.Y / TextureSize.Y),
+		FVector2f(Shown.Max.X / TextureSize.X, Shown.Max.Y / TextureSize.Y)));
 	return &Thumbnail.Get();
 }

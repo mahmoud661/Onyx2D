@@ -10,8 +10,9 @@ class UPaperTileSet;
 DECLARE_DELEGATE_TwoParams(FOnOnyxTilesSelected, FIntPoint /*Min*/, FIntPoint /*Size*/);
 
 /**
- * Tile set sheet: click a tile, or drag across several to pick a block (a stamp).
- * Zoom 0 fits the width; put it in a scroll box for big sheets.
+ * Tile set: every tile in its own slot, cropped to its square of the sheet (a padded sheet never bleeds), in the tile set's
+ * columns and rows. Click a tile, or drag across several to pick a block (a stamp). Zoom 0 fits the width; put it in a
+ * scroll box for big sets.
  */
 class SOnyxTilePalette : public SLeafWidget
 {
@@ -42,6 +43,8 @@ private:
 	/** Tile grid coordinate under a screen position (INDEX_NONE components when outside). */
 	FIntPoint TileAt(const FGeometry& Geometry, const FVector2D& ScreenPosition) const;
 	FVector2f TileTopLeft(const FIntPoint& Tile, float Scale) const;
+	/** From one tile's slot to the next: the tile's size at this scale plus the gap. */
+	FVector2f TilePitch(float Scale) const;
 	void EmitSelection(const FIntPoint& A, const FIntPoint& B);
 
 	TAttribute<UPaperTileSet*> TileSet;

@@ -11,5 +11,6 @@ public class Onyx2DRuntime : ModuleRules
 			"Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput",
 			"Paper2D", "ProceduralMeshComponent", "DeveloperSettings"
 		});
+		PrivateDependencyModuleNames.AddRange(new[] { "AssetRegistry" });
 	}
 }

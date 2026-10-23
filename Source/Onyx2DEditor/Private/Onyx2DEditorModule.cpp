@@ -14,10 +14,12 @@
 #include "PaperTileSet.h"
 #include "Builders/OnyxNormalMaps.h"
 #include "Lighting/OnyxEditorLightingView.h"
+#include "Lighting/OnyxLight2DComponent.h"
+#include "Lighting/OnyxLightVisualizer.h"
+#include "Editor/UnrealEdEngine.h"
+#include "UnrealEdGlobals.h"
 #include "Builders/OnyxFramePacker.h"
 #include "Builders/OnyxMaterialBuilder.h"
-#include "Examples/OnyxSunnyLandExample.h"
-#include "Examples/OnyxLearnExample.h"
 #include "FileHelpers.h"
 #include "Level/OnyxMapPainter.h"
 #include "Builders/OnyxTilePadding.h"
@@ -34,6 +36,7 @@
 #include "MessageLogModule.h"
 #include "Modules/ModuleManager.h"
 #include "Style/OnyxEditorStyle.h"
+#include "OnyxEditorExtensions.h"
 #include "Styling/AppStyle.h"
 #include "Subsystems/ImportSubsystem.h"
 #include "ToolMenus.h"
@@ -119,6 +122,11 @@ public:
 	virtual void ShutdownModule() override
 	{
 		LightingView.Stop();
+		if (GUnrealEd && LightVisualizer)
+		{
+			GUnrealEd->UnregisterComponentVisualizer(UOnyxLight2DComponent::StaticClass()->GetFName());
+			LightVisualizer.Reset();
+		}
 		if (CaptureCommand)
 		{
 			IConsoleManager::Get().UnregisterConsoleObject(CaptureCommand);
@@ -379,39 +387,22 @@ private:
 				OnyxTools::Notify(FText::Format(INVTEXT("Rebuilt {0} plugin material assets"), Built.Num()), true);
 			})));
 
-		FToolMenuSection& Examples = Menu->AddSection("Examples", INVTEXT("Examples"));
-		Examples.AddMenuEntry("BuildSunnyLand", INVTEXT("Build Sunny Land Example"),
-			INVTEXT("Builds a complete level from the Sunny Land pack (CC0, shipped in the plugin's Extras folder): fox, enemies, items, the original map, lighting. Opens it when done."),
-			FOnyxEditorStyle::Icon("Onyx2D.Tab.Level"),
-			FUIAction(FExecuteAction::CreateLambda([]()
+		// What other modules add (the Onyx2D Examples plugin: Build Sunny Land and the rest), each card's buttons in its section.
+		for (const FOnyxHomeCard& Card : FOnyxEditorExtensions::GetHomeCards())
+		{
+			if (Card.MenuSection.IsEmpty())
 			{
-				FText Error;
-				if (FOnyxSunnyLandExample::Build(Error))
-				{
-					FEditorFileUtils::LoadMap(FPackageName::LongPackageNameToFilename(FOnyxSunnyLandExample::LevelPath, FPackageName::GetMapPackageExtension()));
-					OnyxTools::Notify(INVTEXT("Sunny Land example built: press Play"), true);
-				}
-				else
-				{
-					OnyxTools::Notify(Error, false);
-				}
-			})));
-		Examples.AddMenuEntry("BuildLearnUnreal", INVTEXT("Build Learn Unreal Examples"),
-			INVTEXT("Builds what the docs' Learn Unreal pages make, finished, in Content/LearnUnreal (a first Blueprint, a spring pad, the controls as input assets, a playground level and LU_Talking, where a lever, a door and a lamp talk to each other). Opens the playground when done."),
-			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Help"),
-			FUIAction(FExecuteAction::CreateLambda([]()
+				continue;
+			}
+			FToolMenuSection& Section = Menu->FindOrAddSection(FName(*Card.MenuSection.ToString()), Card.MenuSection);
+			for (int32 Index = 0; Index < Card.Buttons.Num(); ++Index)
 			{
-				FText Error;
-				if (FOnyxLearnExample::BuildWithSunnyLand(Error))
-				{
-					FEditorFileUtils::LoadMap(FPackageName::LongPackageNameToFilename(FOnyxLearnExample::LevelPath, FPackageName::GetMapPackageExtension()));
-					OnyxTools::Notify(INVTEXT("Learn Unreal examples built in Content/LearnUnreal"), true);
-				}
-				else
-				{
-					OnyxTools::Notify(Error, false);
-				}
-			})));
+				const FOnyxHomeButton& Entry = Card.Buttons[Index];
+				const TFunction<void()> OnClicked = Entry.OnClicked;
+				Section.AddMenuEntry(FName(*FString::Printf(TEXT("%s_%d"), *Card.Name.ToString(), Index)), Entry.Label, Entry.Tooltip,
+					FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([OnClicked]() { OnClicked(); })));
+			}
+		}
 	}
 
 	/** "Generate Normal Map" for textures, sprites and tile sets: every selected asset's sheet gets one. */
@@ -554,6 +545,13 @@ private:
 			PostImportHandle = ImportSubsystem->OnAssetPostImport.AddRaw(this, &FOnyx2DEditorModule::HandleAssetPostImport);
 		}
 		RegisterPlacementCategory();
+		// A selected 2D light shows its reach, shape and motion in the viewport.
+		if (GUnrealEd)
+		{
+			LightVisualizer = MakeShared<FOnyxLightVisualizer>();
+			GUnrealEd->RegisterComponentVisualizer(UOnyxLight2DComponent::StaticClass()->GetFName(), LightVisualizer);
+			LightVisualizer->OnRegister();
+		}
 		// The plugin's materials are built in C++: create any that are missing (fresh checkout, deleted asset).
 		if (!FOnyxMaterialBuilder::AreMaterialsPresent())
 		{
@@ -619,6 +617,7 @@ private:
 	FDelegateHandle MapChangedHandle;
 	bool bSideViewQueued = false;
 	FOnyxEditorLightingView LightingView;
+	TSharedPtr<FOnyxLightVisualizer> LightVisualizer;
 	IConsoleObject* OpenCommand = nullptr;
 	IConsoleObject* CaptureCommand = nullptr;
 };

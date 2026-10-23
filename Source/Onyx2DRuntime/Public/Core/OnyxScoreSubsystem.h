@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Core/OnyxSaveSubsystem.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "OnyxScoreSubsystem.generated.h"
 
@@ -11,15 +12,23 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnyxItemsChangedSignature, FName, 
 
 /**
  * What the player has collected: coins, and named items such as keys. Lives on the game instance, so it lasts across
- * levels. Pickups and the Give action add to it; Trigger Zones that need an item read and use it up.
+ * levels. Pickups and the Give action add to it; Trigger Zones that need an item read and use it up. Kept in the save.
  */
 UCLASS()
-class ONYX2DRUNTIME_API UOnyxScoreSubsystem : public UGameInstanceSubsystem
+class ONYX2DRUNTIME_API UOnyxScoreSubsystem : public UGameInstanceSubsystem, public IOnyxSaveable
 {
 	GENERATED_BODY()
 
 public:
 	static UOnyxScoreSubsystem* Get(const UObject* WorldContextObject);
+
+	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+	virtual void Deinitialize() override;
+
+	// IOnyxSaveable
+	virtual FString GetSaveKey() const override { return TEXT("Onyx.Score"); }
+	virtual void WriteSave(FArchive& Archive) override;
+	virtual void ReadSave(FArchive& Archive) override;
 
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Score")
 	void AddCoins(int32 Amount);

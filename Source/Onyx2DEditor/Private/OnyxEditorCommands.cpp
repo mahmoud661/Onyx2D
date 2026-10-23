@@ -5,6 +5,7 @@
 // a demo, a test or a set of docs screenshots can be driven without the mouse.
 
 #include "Level/OnyxLevelTools.h"
+#include "Core/OnyxLevelData.h"
 #include "Level/OnyxMapPainter.h"
 #include "ContentBrowserModule.h"
 #include "Containers/Ticker.h"
@@ -17,7 +18,10 @@
 #include "EngineUtils.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Docking/TabManager.h"
+#include "GameMapsSettings.h"
 #include "GameProjectGenerationModule.h"
+#include "GameFramework/GameModeBase.h"
+#include "GameFramework/WorldSettings.h"
 #include "HAL/IConsoleManager.h"
 #include "IContentBrowserSingleton.h"
 #include "ISettingsModule.h"
@@ -329,6 +333,42 @@ namespace OnyxEditorCommands
 			}
 		}));
 
+	/** The open level's game mode, for the log: its own override, else the project's default. */
+	FString DescribeGameMode()
+	{
+		UWorld* World = FOnyxLevelTools::GetEditorWorld();
+		const AWorldSettings* Settings = World ? World->GetWorldSettings() : nullptr;
+		if (const UClass* Mode = Settings ? Settings->DefaultGameMode.Get() : nullptr)
+		{
+			return FString::Printf(TEXT("%s (the level's own)"), *Mode->GetName());
+		}
+		return FString::Printf(TEXT("none on the level, project default %s"), *UGameMapsSettings::GetGlobalDefaultGameMode());
+	}
+
+	FAutoConsoleCommand SetupLevelCommand(TEXT("Onyx2D.SetupLevel"),
+		TEXT("Sets up the open level for 2D, like Set Up Level in the Onyx2D window, and logs what it added and the game mode before and after."),
+		FConsoleCommandDelegate::CreateLambda([]()
+		{
+			const FString Before = DescribeGameMode();
+			const TArray<FString> Added = FOnyxLevelTools::SetupCurrentLevel();
+			UE_LOG(LogOnyxEditorCommands, Display, TEXT("Onyx2D.SetupLevel: added [%s]; game mode %s -> %s"),
+				*FString::Join(Added, TEXT(", ")), *Before, *DescribeGameMode());
+		}));
+
+	FAutoConsoleCommand GameStyleCommand(TEXT("Onyx2D.GameStyle"),
+		TEXT("Sets how the open level is played: Onyx2D.GameStyle <SideView | TopDown> (kept in its World Settings, Onyx Level). Without a value, logs it."),
+		FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+		{
+			UWorld* World = FOnyxLevelTools::GetEditorWorld();
+			if (!Args.IsEmpty())
+			{
+				const bool bTopDown = Args[0].Equals(TEXT("TopDown"), ESearchCase::IgnoreCase) || Args[0].Equals(TEXT("Top"), ESearchCase::IgnoreCase);
+				FOnyxLevelTools::SetGameStyle(World, bTopDown ? EOnyxGameStyle::TopDown : EOnyxGameStyle::SideView);
+			}
+			UE_LOG(LogOnyxEditorCommands, Display, TEXT("Onyx2D.GameStyle: %s is played %s"), World ? *World->GetMapName() : TEXT("(no level)"),
+				UOnyxLevelData::GetGameStyle(World) == EOnyxGameStyle::TopDown ? TEXT("top down") : TEXT("side view"));
+		}));
+
 	FAutoConsoleCommand PlayCommand(TEXT("Onyx2D.Play"),
 		TEXT("Plays the open level in the editor's viewport, like the Play button. Onyx2D.Stop ends it."),
 		FConsoleCommandDelegate::CreateLambda([]()
@@ -403,6 +443,28 @@ namespace OnyxEditorCommands
 			FImageUtils::PNGCompressImageArray(Size.X, Size.Y, Pixels, Png);
 			const bool bSaved = FFileHelper::SaveArrayToFile(Png, *File);
 			UE_LOG(LogOnyxEditorCommands, Display, TEXT("Onyx2D.Capture: %s %s (%d x %d)"), bSaved ? TEXT("saved") : TEXT("could not save"), *File, Size.X, Size.Y);
+		}));
+
+	FAutoConsoleCommand WindowCommand(TEXT("Onyx2D.Window"),
+		TEXT("Sizes an editor window, for screenshots: Onyx2D.Window <Main | Top | part of the window title> Maximize | <width> <height>."),
+		FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+		{
+			const TSharedPtr<SWindow> Window = Args.Num() >= 2 && FSlateApplication::IsInitialized() ? FindWindow(Args[0]) : nullptr;
+			if (!Window.IsValid())
+			{
+				UE_LOG(LogOnyxEditorCommands, Warning, TEXT("Onyx2D.Window <window> Maximize | <width> <height>: no such window."));
+				return;
+			}
+			if (Args[1].Equals(TEXT("Maximize"), ESearchCase::IgnoreCase))
+			{
+				Window->Maximize();
+			}
+			else if (Args.Num() >= 3)
+			{
+				Window->Restore();
+				Window->Resize(FVector2D(FCString::Atof(*Args[1]), FCString::Atof(*Args[2])));
+			}
+			UE_LOG(LogOnyxEditorCommands, Display, TEXT("Onyx2D.Window: %s is %s"), *Window->GetTitle().ToString(), *Window->GetSizeInScreen().ToString());
 		}));
 
 	FAutoConsoleCommand ResizeMapCommand(TEXT("Onyx2D.ResizeMap"),

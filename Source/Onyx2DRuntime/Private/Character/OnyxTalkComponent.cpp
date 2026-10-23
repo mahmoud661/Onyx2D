@@ -4,6 +4,7 @@
 #include "AI/OnyxPatrolComponent.h"
 #include "Character/OnyxCharacter.h"
 #include "GameFramework/MovementComponent.h"
+#include "GameFramework/PawnMovementComponent.h"
 #include "Logic/OnyxAction.h"
 #include "Logic/OnyxDialogueSubsystem.h"
 #include "Sound/SoundBase.h"

@@ -45,6 +45,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Prop", meta = (ClampMin = "0.01", UIMax = "8"))
 	float Density = 0.6f;
 
+	/** From above (Top Down levels): how quickly it slides to a stop on the ground once pushed (it doesn't fall or turn). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Physics Prop", meta = (ClampMin = "0", UIMax = "20"))
+	float GroundFriction = 6.f;
+
 	/** Colour of the stand-in shown until it has a sprite. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Prop")
 	FLinearColor PlaceholderColor = FLinearColor(0.55f, 0.36f, 0.2f);

@@ -43,6 +43,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Health")
 	void SetInvulnerableFor(float Seconds);
 
+	/** Can't be hurt at all until switched off again (a boss before its fight, a vanished foe, a cutscene). */
+	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Health")
+	void SetInvulnerable(bool bInvulnerable) { bScriptedInvulnerable = bInvulnerable; }
+
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Health")
 	float GetHealth() const { return Health; }
 
@@ -54,6 +58,10 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Health")
 	bool IsInvulnerable() const;
+
+	/** Can't be hurt for a moment (after a hit, a respawn, a clip's Invulnerable window), not because it was switched off. */
+	UFUNCTION(BlueprintPure, Category = "Onyx2D|Health")
+	bool IsBrieflyInvulnerable() const;
 
 	UPROPERTY(BlueprintAssignable, Category = "Onyx2D|Health")
 	FOnyxHealthChangedSignature OnHealthChanged;
@@ -74,5 +82,6 @@ private:
 	float Health = 0.f;
 
 	double InvulnerableUntil = 0.0;
+	bool bScriptedInvulnerable = false;
 	bool bDead = false;
 };

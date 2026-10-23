@@ -12,8 +12,13 @@
 #include "Engine/StaticMesh.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "Lighting/OnyxLight2D.h"
+#include "Lighting/OnyxLight2DComponent.h"
+#include "PaperFlipbook.h"
+#include "PaperFlipbookComponent.h"
 #include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
+#include "World/OnyxFlipbookEffect.h"
 
 AOnyxLevelExit::AOnyxLevelExit()
 {
@@ -32,12 +37,42 @@ AOnyxLevelExit::AOnyxLevelExit()
 	Visual->SetRelativeScale3D(FVector(0.9f, 0.1f, 1.8f));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	Visual->SetStaticMesh(Cube.Object);
+
+	LookComponent = CreateDefaultSubobject<UPaperFlipbookComponent>(TEXT("Look"));
+	LookComponent->SetupAttachment(Trigger);
+	LookComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	LookComponent->SetGenerateOverlapEvents(false);
+
+	Glow = CreateDefaultSubobject<UOnyxLight2DComponent>(TEXT("Glow2D"));
+	Glow->SetupAttachment(Trigger);
+	Glow->Intensity = 0.f;
+	Glow->bCastShadows = false;
+	Glow->bOwnGlow = true; // its picture turns most of it away (Light Guard): it lights what is round it
+
+	GlowPulse = CreateDefaultSubobject<UOnyxLightFlickerComponent>(TEXT("GlowPulse"));
+	GlowPulse->Animation = EOnyxLightAnimation::Pulse;
+	GlowPulse->Strength = 0.18f;
+	GlowPulse->Speed = 1.2f;
 }
 
 void AOnyxLevelExit::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
 	UOnyx2DLibrary::ApplySolidColor(Visual, FLinearColor(0.55f, 0.35f, 0.9f));
+	const float Bottom = -Trigger->GetUnscaledBoxExtent().Z;
+	Visual->SetVisibility(Look == nullptr);
+	LookComponent->SetFlipbook(Look);
+	LookComponent->SetVisibility(Look != nullptr);
+	LookComponent->SetRelativeLocation(FVector(0.f, 0.f, Bottom)); // on the floor; the draw order keeps the player in front
+	if (Look)
+	{
+		UOnyx2DLibrary::ConfigureSpriteLighting(LookComponent, false);
+	}
+	Glow->SetRelativeLocation(FVector(0.f, 0.f, Bottom + GlowHeight));
+	Glow->Color = GlowColor;
+	Glow->Radius = GlowRadius;
+	Glow->Intensity = GlowIntensity;
+	Glow->SetVisibility(GlowIntensity > 0.f);
 }
 
 void AOnyxLevelExit::BeginPlay()
@@ -55,6 +90,13 @@ void AOnyxLevelExit::HandleOverlap(UPrimitiveComponent* OverlappedComponent, AAc
 	}
 	bTriggered = true;
 	UOnyxAudioSubsystem::PlaySound2D(this, EnterSound);
+	AOnyxFlipbookEffect::Spawn(this, EnterEffect, Trigger->GetComponentLocation());
+	if (GlowIntensity > 0.f)
+	{
+		// The light swells as the screen goes dark.
+		FlareTime = 0.f;
+		GetWorldTimerManager().SetTimer(FlareTimer, this, &AOnyxLevelExit::Flare, 1.f / 60.f, true);
+	}
 	if (UOnyxPlayerControlComponent* Control = Player->FindComponentByClass<UOnyxPlayerControlComponent>())
 	{
 		Control->SetControlEnabled(false);
@@ -68,6 +110,18 @@ void AOnyxLevelExit::HandleOverlap(UPrimitiveComponent* OverlappedComponent, AAc
 		}
 	}
 	GetWorldTimerManager().SetTimer(TravelTimer, this, &AOnyxLevelExit::Travel, FMath::Max(FadeTime, 0.01f), false);
+}
+
+void AOnyxLevelExit::Flare()
+{
+	FlareTime += 1.f / 60.f;
+	const float Alpha = FMath::Clamp(FlareTime / FMath::Max(FadeTime, 0.05f), 0.f, 1.f);
+	Glow->Intensity = GlowIntensity * (1.f + 2.f * Alpha);
+	Glow->Radius = GlowRadius * (1.f + 0.6f * Alpha);
+	if (Alpha >= 1.f)
+	{
+		GetWorldTimerManager().ClearTimer(FlareTimer);
+	}
 }
 
 void AOnyxLevelExit::Travel()

@@ -1,6 +1,8 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "AI/OnyxPatrolComponent.h"
+#include "AI/OnyxTopDownSteering.h"
+#include "Movement/OnyxMovementComponent.h"
 #include "Character/OnyxCharacter.h"
 #include "Combat/OnyxHealthComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -102,6 +104,11 @@ void UOnyxPatrolComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 		return;
 	}
 
+	if (const UOnyxMovementComponent* Movement = Cast<UOnyxMovementComponent>(Character->GetCharacterMovement()); Movement && Movement->IsTopDown())
+	{
+		TickWander(Character, DeltaTime);
+		return;
+	}
 	switch (Style)
 	{
 	case EOnyxPatrolStyle::Hop: TickHop(Character, DeltaTime); break;
@@ -151,6 +158,63 @@ void UOnyxPatrolComponent::TickFly(ACharacter* Character, float DeltaTime)
 	{
 		Onyx->SetFacing(Player->GetActorLocation().X >= Character->GetActorLocation().X ? EOnyxFacing::Right : EOnyxFacing::Left);
 	}
+}
+
+void UOnyxPatrolComponent::PickWanderSpot()
+{
+	const float Angle = FMath::FRandRange(0.f, UE_TWO_PI);
+	const float Distance = WanderRadius * FMath::Sqrt(FMath::FRand());
+	WanderSpot = Home + FVector(FMath::Cos(Angle) * Distance, 0.f, FMath::Sin(Angle) * Distance);
+	WanderTime = 0.f;
+}
+
+void UOnyxPatrolComponent::TickWander(ACharacter* Character, float DeltaTime)
+{
+	const float Reach = Character->GetCapsuleComponent()->GetScaledCapsuleRadius() + ProbeDistance;
+	FVector Goal = WanderSpot;
+	const APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+	const FVector ToPlayer = Player ? Player->GetActorLocation() - Character->GetActorLocation() : FVector::ZeroVector;
+	const bool bChasing = bChasePlayer && Player && FVector2D(ToPlayer.X, ToPlayer.Z).Size() <= ChaseRange;
+	if (bChasing)
+	{
+		Goal = Player->GetActorLocation();
+	}
+	else if (WanderSpot.IsZero())
+	{
+		PickWanderSpot();
+		Goal = WanderSpot;
+	}
+	const FVector ToGoal = Goal - Character->GetActorLocation();
+	const FVector2D Way(ToGoal.X, ToGoal.Z);
+	WanderTime += DeltaTime;
+	// There (or stuck on the way for long): a pause, then somewhere else.
+	if (!bChasing && (Way.Size() < 24.f || WanderTime > 4.f))
+	{
+		PickWanderSpot();
+		PauseRemaining = PauseAtTurn + FMath::FRandRange(0.f, 1.f);
+		return;
+	}
+	const FVector2D Open = OnyxTopDown::FindOpenWay(*Character, Way, Reach, WayBias);
+	if (Open.IsZero())
+	{
+		if (!bChasing)
+		{
+			PickWanderSpot();
+		}
+		return;
+	}
+	if (Style == EOnyxPatrolStyle::Hop)
+	{
+		// Sits, then a burst across the ground towards the spot.
+		HopTimer -= DeltaTime;
+		if (HopTimer <= 0.f)
+		{
+			HopTimer = HopInterval;
+			Character->LaunchCharacter(FVector(Open.X, 0.f, Open.Y) * HopVelocity.X, true, true);
+		}
+		return;
+	}
+	Character->AddMovementInput(FVector(Open.X, 0.f, Open.Y));
 }
 
 void UOnyxPatrolComponent::TickWalk(ACharacter* Character)

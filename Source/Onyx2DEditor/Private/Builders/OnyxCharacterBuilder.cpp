@@ -4,6 +4,7 @@
 #include "Misc/PackageName.h"
 #include "Builders/OnyxAssetUtils.h"
 #include "Builders/OnyxImageAnalysis.h"
+#include "Builders/OnyxPixelCanvas.h"
 #include "Camera/OnyxCameraComponent.h"
 #include "AI/OnyxPatrolComponent.h"
 #include "Animation/OnyxClip.h"
@@ -74,7 +75,15 @@ FOnyxCharacterSpec FOnyxCharacterSpec::FromStrips(const TMap<FName, UTexture2D*>
 	const TArray<FOnyxClipSpec> Presets = DefaultClips();
 	for (const TPair<FName, UTexture2D*>& Strip : Strips)
 	{
-		const FOnyxClipSpec* Preset = Presets.FindByPredicate([&](const FOnyxClipSpec& P) { return P.Name == Strip.Key; });
+		// A role drawn per direction (Attack1_Up) or another way (Jump_Legs) plays like its plain role (once, at its speed).
+		const FName Base = UOnyxMoveset::GetBaseRole(Strip.Key);
+		const FOnyxClipSpec* Preset = Presets.FindByPredicate([&](const FOnyxClipSpec& P) { return P.Name == Strip.Key || P.Name == Base; });
+		int32 Cut = INDEX_NONE;
+		if (!Preset && Strip.Key.ToString().FindChar(TEXT('_'), Cut))
+		{
+			const FName Plain(*Strip.Key.ToString().Left(Cut));
+			Preset = Presets.FindByPredicate([&](const FOnyxClipSpec& P) { return P.Name == Plain; });
+		}
 		FOnyxClipSpec Clip = Preset ? *Preset : FOnyxClipSpec();
 		Clip.Name = Strip.Key;
 		Clip.bEnabled = true;
@@ -225,8 +234,57 @@ TArray<FIntRect> FOnyxCharacterBuilder::GetFrameRects(const FOnyxCharacterSpec& 
 	return Rects;
 }
 
+FIntRect FOnyxCharacterBuilder::FindBody(const FOnyxCharacterSpec& Spec)
+{
+	const FOnyxClipSpec* Reference = Spec.Clips.FindByPredicate([](const FOnyxClipSpec& A) { return A.bEnabled && A.Name == TEXT("Idle"); });
+	Reference = Reference ? Reference : Spec.Clips.FindByPredicate([](const FOnyxClipSpec& A) { return A.bEnabled; });
+	UTexture2D* Texture = Reference ? ResolveTexture(Spec, *Reference) : nullptr;
+	if (!Texture || !Texture->Source.IsValid() || Texture->Source.GetFormat() != TSF_BGRA8)
+	{
+		return FIntRect();
+	}
+	TArray64<uint8> Data;
+	Texture->Source.GetMipData(Data, 0);
+	const FIntPoint SheetSize(Texture->Source.GetSizeX(), Texture->Source.GetSizeY());
+	const FColor* Pixels = reinterpret_cast<const FColor*>(Data.GetData());
+	FOnyxPixelCanvas Silhouette(Spec.FrameSize.X, Spec.FrameSize.Y);
+	for (const FIntRect& Rect : GetFrameRects(Spec, *Reference))
+	{
+		for (int32 Y = 0; Y < Spec.FrameSize.Y; ++Y)
+		{
+			for (int32 X = 0; X < Spec.FrameSize.X; ++X)
+			{
+				const FIntPoint At = Rect.Min + FIntPoint(X, Y);
+				if (At.X >= 0 && At.Y >= 0 && At.X < SheetSize.X && At.Y < SheetSize.Y && Pixels[int64(At.Y) * SheetSize.X + At.X].A > 0)
+				{
+					Silhouette.Set(X, Y, FColor::White);
+				}
+			}
+		}
+	}
+	return Silhouette.BodyBounds();
+}
+
 void FOnyxCharacterBuilder::FitCapsule(const FOnyxCharacterSpec& Spec, AOnyxCharacter* Defaults, int32& OutPixelsBelowFeet, FOnyxCharacterBuildResult& Result)
 {
+	if (Spec.bFitToBody)
+	{
+		const FIntRect Body = FindBody(Spec);
+		if (Body.Area() > 0)
+		{
+			// The body, a touch smaller than drawn: the edges of a sprite never quite hit or get hit.
+			const float BodyHalfHeight = FMath::Max(Body.Height() * Spec.CentimetersPerPixel * 0.5f, 10.f);
+			const float BodyRadius = FMath::Clamp(Body.Width() * Spec.CentimetersPerPixel * 0.5f * 0.85f, 8.f, BodyHalfHeight);
+			UCapsuleComponent* BodyCapsule = Defaults->GetCapsuleComponent();
+			BodyCapsule->Modify();
+			BodyCapsule->SetCapsuleSize(BodyRadius, BodyHalfHeight);
+			OutPixelsBelowFeet = Spec.FrameSize.Y - Body.Max.Y;
+			Result.CapsuleSize = FVector2D(BodyRadius, BodyHalfHeight);
+			return;
+		}
+		Result.Warnings.Add(TEXT("Fit to body: could not find the body in Idle, fitted to the whole frame."));
+	}
+
 	const FOnyxClipSpec* Reference = Spec.Clips.FindByPredicate([](const FOnyxClipSpec& A) { return A.bEnabled && A.Name == TEXT("Idle"); });
 	Reference = Reference ? Reference : Spec.Clips.FindByPredicate([](const FOnyxClipSpec& A) { return A.bEnabled; });
 	UTexture2D* Texture = Reference ? ResolveTexture(Spec, *Reference) : nullptr;
@@ -270,6 +328,13 @@ FOnyxCharacterBuildResult FOnyxCharacterBuilder::Build(const FOnyxCharacterSpec&
 	UPaperFlipbook* IdleFlipbook = nullptr;
 	UPaperFlipbook* FirstFlipbook = nullptr;
 	const float PixelsPerUnit = 1.f / FMath::Max(Spec.CentimetersPerPixel, 0.01f);
+	// Where the body's middle is across a frame: every frame turns (faces left) about it.
+	float BodyMiddle = Spec.FrameSize.X * 0.5f;
+	if (Spec.bFitToBody)
+	{
+		const FIntRect Body = FindBody(Spec);
+		BodyMiddle = Body.Area() > 0 ? (Body.Min.X + Body.Max.X) * 0.5f : BodyMiddle;
+	}
 
 	for (const FOnyxClipSpec& ClipSpec : Spec.Clips)
 	{
@@ -287,7 +352,8 @@ FOnyxCharacterBuildResult FOnyxCharacterBuilder::Build(const FOnyxCharacterSpec&
 		Packages.Add(Texture->GetPackage());
 
 		// Each clip's frames end at its feet line: the bottom pivot is then where the character stands.
-		const TArray<FIntRect> Rects = FOnyxImageAnalysis::CropToFeet(Texture, GetFrameRects(Spec, ClipSpec));
+		const bool bGroundLine = Spec.FeetRowsFromBottom >= 0;
+		const TArray<FIntRect> Rects = bGroundLine ? GetFrameRects(Spec, ClipSpec) : FOnyxImageAnalysis::CropToFeet(Texture, GetFrameRects(Spec, ClipSpec));
 		if (Rects.IsEmpty())
 		{
 			Result.Warnings.Add(FString::Printf(TEXT("%s: row %d has no frames inside the texture, skipped."), *ClipSpec.Name.ToString(), ClipSpec.Row));
@@ -314,8 +380,11 @@ FOnyxCharacterBuildResult FOnyxCharacterBuilder::Build(const FOnyxCharacterSpec&
 		for (int32 Index = 0; Index < Rects.Num(); ++Index)
 		{
 			const FString SpriteName = FString::Printf(TEXT("S_%s_%s_%02d"), *Name, *ClipSpec.Name.ToString(), Index);
-			if (UPaperSprite* Sprite = FOnyxAssetUtils::CreateSprite(Root / TEXT("Sprites"), SpriteName, Texture,
-				Rects[Index].Min, Rects[Index].Size(), PixelsPerUnit, ESpritePivotMode::Bottom_Center))
+			// Pivot where it stands: the bottom centre of the cut frame, or the ground line of the whole frame.
+			const FIntRect& Rect = Rects[Index];
+			const FVector2D Feet(Rect.Min.X + (Spec.bFitToBody ? BodyMiddle : Rect.Width() * 0.5f), Rect.Max.Y - (bGroundLine ? Spec.FeetRowsFromBottom : 0));
+			if (UPaperSprite* Sprite = FOnyxAssetUtils::CreateSprite(Root / TEXT("Sprites"), SpriteName, Texture, Rect.Min, Rect.Size(), PixelsPerUnit,
+				(bGroundLine || Spec.bFitToBody) ? ESpritePivotMode::Custom : ESpritePivotMode::Bottom_Center, nullptr, Feet))
 			{
 				if (NormalMap)
 				{
@@ -416,8 +485,12 @@ FOnyxCharacterBuildResult FOnyxCharacterBuilder::Build(const FOnyxCharacterSpec&
 
 	if (UPaperFlipbookComponent* SpriteComponent = Defaults->GetSprite())
 	{
-		// The frames end at the feet (CropToFeet), so the sprite's bottom goes on the capsule's bottom.
+		// The pivot is at the feet (frames cut to them, or a ground line), so the sprite's origin goes on the capsule's bottom.
 		SpriteComponent->Modify();
+		if (Spec.FeetRowsFromBottom >= 0)
+		{
+			Defaults->bAlignSpriteToCapsule = false; // every frame already stands on the same line; bounds would differ per clip
+		}
 		SpriteComponent->SetFlipbook(IdleFlipbook ? IdleFlipbook : FirstFlipbook);
 		const float HalfHeight = Defaults->GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight();
 		SpriteComponent->SetRelativeLocation(FVector(0.f, 0.f, -HalfHeight));

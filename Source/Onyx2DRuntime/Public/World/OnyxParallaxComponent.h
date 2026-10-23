@@ -31,4 +31,7 @@ private:
 	FVector StartLocation = FVector::ZeroVector;
 	FVector CameraStart = FVector::ZeroVector;
 	bool bHasCameraStart = false;
+	/** When the start was taken, and the camera last frame: a snap right after the start moves the start with it. */
+	double CameraStartTime = 0.0;
+	FVector LastCamera = FVector::ZeroVector;
 };

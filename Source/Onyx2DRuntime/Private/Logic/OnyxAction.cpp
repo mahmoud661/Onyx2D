@@ -13,6 +13,7 @@
 #include "Feedback/OnyxFeedbackSubsystem.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/MovementComponent.h"
+#include "GameFramework/PawnMovementComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"

@@ -32,6 +32,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Collision", meta = (ClampMin = "0.05", ClampMax = "1"))
 	float OneWayHeight = 0.25f;
 
+	/**
+	 * Solid shapes reach this fraction of a tile past their tiles on every side: for art drawn with a rim around the solid
+	 * tiles (corner-based terrains), so characters stand on the rim they see.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Collision", meta = (ClampMin = "0", ClampMax = "0.5"))
+	float SolidOutset = 0.f;
+
+	/** How thick an Edge tile's walls are, as a fraction of a tile (inside the tile, along each blocked side). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Collision", meta = (ClampMin = "0.02", ClampMax = "0.5"))
+	float EdgeThickness = 0.2f;
+
 	/** Hazard zones are shrunk by this fraction of a tile on every side, so grazing a spike doesn't hurt. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Collision", meta = (ClampMin = "0", ClampMax = "0.45"))
 	float HazardInset = 0.15f;
@@ -85,8 +96,13 @@ private:
 	FBox CellRectToLocalBox(const UPaperTileMapComponent& TileMap, const FIntRect& Rect) const;
 	UPrimitiveComponent* AddBox(UPaperTileMapComponent& TileMap, TSubclassOf<UPrimitiveComponent> Class, const FBox& LocalBox);
 	void UpdateRegistry(bool bRegister);
-	/** Sends the solid rectangles to the 2D lighting as shadow occluders (editor and game). */
-	void UpdateLightOccluders(const UPaperTileMapComponent* TileMapComponent, const TArray<FIntRect>& SolidRects);
+	/** Sends the solid rectangles and the ramps' surfaces (local space) to the 2D lighting as shadow occluders. */
+	void UpdateLightOccluders(const UPaperTileMapComponent* TileMapComponent, const TArray<FIntRect>& SolidRects, const TArray<TPair<FVector, FVector>>& RampSurfaces);
+	/**
+	 * Slope tiles: one smooth ramp per diagonal row of them (a box turned to 45 degrees, its top on the slope's line raised by
+	 * Solid Outset), tagged "Onyx.Slope". Returns each ramp's surface in local space.
+	 */
+	TArray<TPair<FVector, FVector>> BuildRamps(UPaperTileMapComponent& TileMap, const TArray<EOnyxTileCollision>& Cells, int32 Width, int32 Height);
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UPrimitiveComponent>> Shapes;

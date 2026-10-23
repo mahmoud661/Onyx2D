@@ -13,6 +13,9 @@
  * characters, the player in front) and its own slot inside the layer; the sprites inside one actor follow their
  * Translucency Sort Priority. Onyx2D's sprite materials turn that into a tiny depth bias along the view direction, so
  * nothing moves on screen or in the world. Works in the editor and in the game, with nothing to set up.
+ *
+ * In a Top Down level, props, items, characters and the player share one layer drawn in the order of their feet: whoever
+ * stands lower on the screen is in front, so a character walks behind a tree and in front of it.
  */
 UCLASS()
 class ONYX2DRUNTIME_API UOnyxDrawOrderSubsystem : public UTickableWorldSubsystem
@@ -40,6 +43,15 @@ public:
 	/** The depth bias (cm, towards the camera) of a layer, a slot in it and a sprite's priority inside its actor. */
 	static float GetBias(EOnyxDrawLayer Layer, int32 Slot, int32 ComponentPriority);
 
+	/** Top down: the depth bias of a sprite in Layer whose actor stands with its feet at FeetZ. */
+	static float GetTopDownBias(EOnyxDrawLayer Layer, float FeetZ, int32 Slot, int32 ComponentPriority);
+
+	/** Top down: the layers drawn in the order of their feet. */
+	static bool IsSortedByFeet(EOnyxDrawLayer Layer);
+
+	/** Where an actor stands: a character's feet (the bottom of its capsule), else the bottom of its pictures. */
+	static float FindFeetZ(const AActor* Actor);
+
 	// UTickableWorldSubsystem
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
@@ -57,7 +69,13 @@ private:
 	int32 FindSlot(const AActor* Actor, EOnyxDrawLayer Layer);
 	void HandleActorAdded(AActor* Actor);
 
+	/** Top down: re-sorts the actors that move by their feet, every frame. */
+	void RefreshMovers();
+	bool IsTopDownWorld() const;
+
 	TMap<TWeakObjectPtr<const AActor>, int32> Slots;
+	/** Top down: actors sorted by their feet that can move (characters, pickups, moving props). */
+	TSet<TWeakObjectPtr<AActor>> Movers;
 	int32 NextSlot[8] = {};
 	/** Seconds since the last full pass. Blueprints rebuild their components when edited, which resets the bias. */
 	float SinceRefresh = 0.f;

@@ -15,7 +15,7 @@ Read it before adding a class.
 | Something that happens at an instant of a clip | `UOnyxClipEvent` | Event |
 | Something that stays open for a span of a clip | `UOnyxClipWindow` | Window |
 | A named gameplay event a clip can send | `UOnyxMoveset::Messages` + `UOnyxClipEvent_Message` | Message |
-| What a character does | `UOnyx*Component` behaviours: PlayerControl, Camera, Respawn, Patrol, ContactDamage, Stompable, Health, Combat | Behaviours |
+| What a character does | `UOnyx*Component` behaviours: PlayerControl, Camera, Respawn, Patrol, ContactDamage, Stompable, EnemyAI, CharacterEffects, Health, Combat | Behaviours |
 | Services shared by the whole game | `UOnyx*Subsystem`: Audio, Lighting, Feedback, World, Score, UI | — |
 
 ### How a character animates
@@ -90,8 +90,11 @@ Source/
    ├─ Level/               level operations: painter, placeables, validator, level tools
    ├─ ToolsWindow/         the Onyx2D Tools window and its tabs (Home, Import, Library, Tiles, Painter, Parallax, Level)
    ├─ Widgets/             shared widgets: flipbook preview, sprite slicer, tile palette, map canvas
-   ├─ Style/  Commandlets/  Examples/  Lighting/
+   ├─ Style/  Commandlets/  Lighting/
 ```
+
+The example levels are a separate plugin, Onyx2D Examples, built on the editor's public builder API; it adds its Build
+buttons to the Home tab and the Onyx2D menu through `FOnyxEditorExtensions`, so Onyx2D never refers to it.
 
 ## Principles
 

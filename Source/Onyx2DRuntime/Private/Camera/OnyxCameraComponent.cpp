@@ -1,6 +1,7 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "Camera/OnyxCameraComponent.h"
+#include "Movement/OnyxMovementComponent.h"
 #include "Camera/OnyxCameraBounds.h"
 #include "Core/OnyxWorldSubsystem.h"
 #include "Engine/World.h"
@@ -144,7 +145,11 @@ FOnyxCameraTarget UOnyxCameraComponent::GetTarget() const
 		Target.Velocity = FVector2D(Velocity.X, Velocity.Z);
 		const ACharacter* Character = Cast<ACharacter>(Owner);
 		const UCharacterMovementComponent* Movement = Character ? Character->GetCharacterMovement() : nullptr;
-		Target.bGrounded = !Movement || Movement->IsMovingOnGround();
+		// Swimming counts as standing for the camera: it follows the swimmer up and down instead of holding the height it
+		// dived from (and doesn't look down as if it were falling).
+		const UOnyxMovementComponent* OnyxMovement = Cast<UOnyxMovementComponent>(Movement);
+		Target.bTopDown = OnyxMovement && OnyxMovement->IsTopDown();
+		Target.bGrounded = !Movement || Movement->IsMovingOnGround() || (OnyxMovement && OnyxMovement->IsSwimmingInWater()) || Target.bTopDown;
 	}
 	return Target;
 }
@@ -272,8 +277,39 @@ void UOnyxCameraComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 	ApplyLens();
 
 	const FVector2D ViewHalf = GetViewHalfExtents();
-	const FVector2D Center = Confine(Framing.Update(Current, Target, ViewHalf, DeltaTime), ViewHalf, Zone, DeltaTime);
+	const FVector2D Framed = FrameFocus(Framing.Update(Current, Target, ViewHalf, DeltaTime), Target, ViewHalf, Zone, DeltaTime);
+	const FVector2D Center = Confine(Framed, ViewHalf, Zone, DeltaTime);
 	ApplyTransform(Center, Shake.Update(Current, DeltaTime));
+}
+
+FVector2D UOnyxCameraComponent::FrameFocus(const FVector2D& Framed, const FOnyxCameraTarget& Target, const FVector2D& ViewHalf, const AOnyxCameraBounds* Zone,
+	float DeltaTime)
+{
+	FVector2D Goal = Framed;
+	if (Zone && !Zone->FocusActors.IsEmpty())
+	{
+		FVector2D Sum = FVector2D::ZeroVector;
+		int32 Count = 0;
+		for (const AActor* Actor : Zone->FocusActors)
+		{
+			if (IsValid(Actor))
+			{
+				Sum += FVector2D(Actor->GetActorLocation().X, Actor->GetActorLocation().Z);
+				++Count;
+			}
+		}
+		if (Count > 0)
+		{
+			// Halfway between the player and what matters here, the player kept well inside the view.
+			const FVector2D Player = Target.Position;
+			const FVector2D Between = (Player + Sum / Count) * 0.5f;
+			const FVector2D Margin = ViewHalf * 0.72f;
+			Goal.X = FMath::Clamp(Between.X, Player.X - Margin.X, Player.X + Margin.X);
+			Goal.Y = FMath::Clamp(Between.Y, Player.Y - Margin.Y, Player.Y + Margin.Y);
+		}
+	}
+	FocusOffset = FMath::Vector2DInterpTo(FocusOffset, Goal - Framed, DeltaTime, 3.f);
+	return Framed + FocusOffset;
 }
 
 void UOnyxCameraComponent::ApplyTransform(const FVector2D& Center, const FVector& ShakeOffset)
@@ -292,4 +328,11 @@ void UOnyxCameraComponent::ApplyTransform(const FVector2D& Center, const FVector
 		PlaneY + Distance,
 		GridSnap(Center.Y + ShakeOffset.Y, Snap));
 	SetWorldLocationAndRotation(Location, FRotator(0.f, CameraYaw, Current.bPixelPerfect ? 0.f : ShakeOffset.Z));
+	// Sounds are heard from where the camera looks on the gameplay plane (the camera itself sits far in front of it):
+	// distance fades sounds off screen, not everything on it. Left and right still come from the camera.
+	const APawn* Pawn = Cast<APawn>(Owner);
+	if (APlayerController* Player = Pawn ? Cast<APlayerController>(Pawn->GetController()) : nullptr)
+	{
+		Player->SetAudioListenerAttenuationOverride(nullptr, FVector(Center.X, PlaneY, Center.Y));
+	}
 }

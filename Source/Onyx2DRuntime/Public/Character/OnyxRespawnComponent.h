@@ -22,6 +22,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Respawn", meta = (ClampMin = "0", Units = "s"))
 	float RespawnDelay = 1.2f;
 
+	/** The player's screen fades to black before coming back and in again after, seconds (0 = no fade). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Respawn", meta = (ClampMin = "0", Units = "s"))
+	float FadeTime = 0.4f;
+
 	/** Seconds of invulnerability after coming back. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Respawn", meta = (ClampMin = "0", Units = "s"))
 	float InvulnerableTime = 1.f;
@@ -45,4 +49,8 @@ private:
 
 	FVector RespawnLocation = FVector::ZeroVector;
 	FTimerHandle RespawnTimer;
+	FTimerHandle FadeTimer;
+	void FadeOut();
+	/** The camera of the player driving this character (none for others). */
+	class APlayerCameraManager* GetCameraManager() const;
 };

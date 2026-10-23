@@ -49,6 +49,9 @@ private:
 	void ShowDialogueBox();
 	void HideDialogueBox();
 	void HandlePauseRequested(APlayerController* Player);
+	/** An Onyx Shop was opened: its list, the game waiting. */
+	void ShowShop(class AOnyxShop* Shop, AActor* Buyer);
+	FDelegateHandle ShopHandle;
 	APlayerController* GetPlayerController() const;
 
 	UPROPERTY(Transient)

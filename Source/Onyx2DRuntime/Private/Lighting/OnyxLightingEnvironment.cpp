@@ -9,11 +9,14 @@
 #include "Engine/World.h"
 #include "Lighting/OnyxLightingSubsystem.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Time/OnyxCalendarSubsystem.h"
 
 namespace
 {
 	const FName LightBufferParam(TEXT("LightBuffer"));
 	const FName PositionBufferParam(TEXT("PositionBuffer"));
+	const FName OwnGlowBufferParam(TEXT("OwnGlowBuffer"));
+	const FName HaloBufferParam(TEXT("HaloBuffer"));
 	const FName AmbientParam(TEXT("Ambient"));
 	const FName SunColorParam(TEXT("SunColor"));
 	const FName SunDirectionParam(TEXT("SunDirection"));
@@ -107,7 +110,15 @@ void AOnyxLightingEnvironment::Tick(float DeltaSeconds)
 	{
 		return;
 	}
-	TimeOfDay = FMath::Frac(TimeOfDay + DeltaSeconds / FMath::Max(DayLength, 5.f));
+	// With the Onyx Calendar on, the hour is the calendar's clock; else the cycle runs on its own.
+	if (const UOnyxCalendarSubsystem* Calendar = UOnyxCalendarSubsystem::Get(this); Calendar && Calendar->IsRunning())
+	{
+		TimeOfDay = Calendar->GetDayFraction();
+	}
+	else
+	{
+		TimeOfDay = FMath::Frac(TimeOfDay + DeltaSeconds / FMath::Max(DayLength, 5.f));
+	}
 	if (IsNight() != bWasNight)
 	{
 		bWasNight = IsNight();
@@ -127,13 +138,18 @@ void AOnyxLightingEnvironment::EnsureComposite()
 	PostProcess->Settings.WeightedBlendables.Array.Add(FWeightedBlendable(1.f, Composite));
 }
 
-void AOnyxLightingEnvironment::SetLightBuffers(UTexture* LightBuffer, UTexture* PositionBuffer)
+void AOnyxLightingEnvironment::SetLightBuffers(UTexture* LightBuffer, UTexture* PositionBuffer, UTexture* OwnGlowBuffer, UTexture* HaloBuffer)
 {
 	EnsureComposite();
 	if (Composite)
 	{
 		Composite->SetTextureParameterValue(LightBufferParam, LightBuffer);
 		Composite->SetTextureParameterValue(PositionBufferParam, PositionBuffer);
+		Composite->SetTextureParameterValue(OwnGlowBufferParam, OwnGlowBuffer);
+		if (HaloBuffer)
+		{
+			Composite->SetTextureParameterValue(HaloBufferParam, HaloBuffer);
+		}
 	}
 }
 

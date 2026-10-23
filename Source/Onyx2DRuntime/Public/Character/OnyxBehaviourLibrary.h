@@ -27,6 +27,8 @@ enum class EOnyxBehaviour : uint8
 	Stompable = 1 << 5,
 	/** The player can talk to it with Interact (Talk component). */
 	Talk = 1 << 6,
+	/** Sees, chases and attacks the player with a readable rhythm, and drops coins (Enemy AI component). */
+	EnemyAI = 1 << 7 UMETA(DisplayName = "Enemy AI"),
 };
 ENUM_CLASS_FLAGS(EOnyxBehaviour);
 
@@ -52,4 +54,7 @@ public:
 
 	/** Behaviours of a classic platformer foe. */
 	static constexpr EOnyxBehaviour PatrolFoePreset = EOnyxBehaviour::Patrol | EOnyxBehaviour::ContactDamage | EOnyxBehaviour::Stompable;
+
+	/** Behaviours of a foe that fights back: patrols, notices the player, chases and attacks. */
+	static constexpr EOnyxBehaviour FightingFoePreset = EOnyxBehaviour::Patrol | EOnyxBehaviour::ContactDamage | EOnyxBehaviour::EnemyAI;
 };

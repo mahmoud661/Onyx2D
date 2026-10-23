@@ -70,9 +70,99 @@ void AOnyxPickup::BeginPlay()
 	Trigger->OnComponentBeginOverlap.AddUniqueDynamic(this, &AOnyxPickup::HandleOverlap);
 }
 
+void AOnyxPickup::Pop(FVector2D Velocity)
+{
+	PopVelocity = Velocity;
+	bPopping = true;
+	bTopDownPop = UOnyx2DLibrary::IsTopDown(this);
+	if (bTopDownPop)
+	{
+		// From above: across the ground (sideways as thrown, scattered up and down the screen), hopping as it goes.
+		PopVelocity = FVector2D(Velocity.X, FMath::FRandRange(-0.6f, 0.6f) * Velocity.Y);
+		PopRise = Velocity.Y * 0.7f;
+		PopHop = 0.f;
+	}
+}
+
+void AOnyxPickup::TickPopTopDown(float DeltaSeconds)
+{
+	PopRise -= 1600.f * DeltaSeconds;
+	PopHop = FMath::Max(PopHop + PopRise * DeltaSeconds, 0.f);
+	PopVelocity *= FMath::Exp(-2.5f * DeltaSeconds); // the ground takes the speed off
+	const FVector From = GetActorLocation();
+	const FVector Step(PopVelocity.X * DeltaSeconds, 0.f, PopVelocity.Y * DeltaSeconds);
+	FHitResult Hit;
+	if (GetWorld()->LineTraceSingleByObjectType(Hit, From, From + Step + Step.GetSafeNormal() * Trigger->GetScaledSphereRadius() * 0.5f,
+		FCollisionObjectQueryParams(ECC_WorldStatic), FCollisionQueryParams(SCENE_QUERY_STAT(OnyxPickupPop), false, this)))
+	{
+		// Off a wall, losing most of its speed.
+		const FVector2D Normal = FVector2D(Hit.ImpactNormal.X, Hit.ImpactNormal.Z).GetSafeNormal();
+		PopVelocity = (PopVelocity - 2.f * FVector2D::DotProduct(PopVelocity, Normal) * Normal) * 0.4f;
+	}
+	else
+	{
+		SetActorLocation(From + Step);
+	}
+	GetBobbingComponent()->SetRelativeLocation(VisualBase + FVector(0.f, 0.f, PopHop));
+	if (PopHop <= 0.f && PopRise < 0.f)
+	{
+		bPopping = false;
+		CollectIfTouching();
+	}
+}
+
+void AOnyxPickup::TickPop(float DeltaSeconds)
+{
+	PopVelocity.Y -= 1600.f * DeltaSeconds; // snappier than world gravity: a coin, not a feather
+	const FVector From = GetActorLocation();
+	const FVector Step(PopVelocity.X * DeltaSeconds, 0.f, PopVelocity.Y * DeltaSeconds);
+	// It rests on its middle half a coin above the ground (the picture is centred on the actor).
+	const float Rest = Trigger->GetScaledSphereRadius() * 0.8f;
+	FHitResult Hit;
+	if (GetWorld()->LineTraceSingleByObjectType(Hit, From, From + Step + Step.GetSafeNormal() * Rest, FCollisionObjectQueryParams(ECC_WorldStatic),
+		FCollisionQueryParams(SCENE_QUERY_STAT(OnyxPickupPop), false, this)))
+	{
+		if (Hit.ImpactNormal.Z > 0.5f && PopVelocity.Y <= 0.f)
+		{
+			SetActorLocation(Hit.ImpactPoint + FVector(0.f, 0.f, Rest));
+			bPopping = false;
+			CollectIfTouching();
+		}
+		else if (FMath::Abs(Hit.ImpactNormal.X) > 0.5f)
+		{
+			PopVelocity.X = -PopVelocity.X * 0.4f; // off a wall
+		}
+		else
+		{
+			PopVelocity.Y = FMath::Min(PopVelocity.Y, 0.f); // under a ceiling
+		}
+		return;
+	}
+	SetActorLocation(From + Step);
+}
+
+void AOnyxPickup::CollectIfTouching()
+{
+	TArray<AActor*> Touching;
+	Trigger->GetOverlappingActors(Touching, APawn::StaticClass());
+	for (AActor* Actor : Touching)
+	{
+		HandleOverlap(Trigger, Actor, nullptr, 0, false, FHitResult());
+		if (IsActorBeingDestroyed())
+		{
+			return;
+		}
+	}
+}
+
 void AOnyxPickup::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (bPopping)
+	{
+		bTopDownPop ? TickPopTopDown(DeltaSeconds) : TickPop(DeltaSeconds);
+		return;
+	}
 	Phase += DeltaSeconds * BobSpeed;
 	float Bob = FMath::Sin(Phase) * BobHeight;
 	// Animated pickups bob in whole art pixels, so the pixel art stays crisp.

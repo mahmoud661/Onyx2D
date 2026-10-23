@@ -14,6 +14,9 @@
 #include "Materials/MaterialParameterCollection.h"
 #include "Lighting/OnyxLight2DComponent.h"
 #include "Lighting/OnyxLightingEnvironment.h"
+#include "Lighting/OnyxPixelLightComponent.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogOnyxLighting, Log, All);
 
 void UOnyxLightingSubsystem::RegisterEnvironment(AOnyxLightingEnvironment* InEnvironment)
 {
@@ -22,7 +25,7 @@ void UOnyxLightingSubsystem::RegisterEnvironment(AOnyxLightingEnvironment* InEnv
 	bHasMood = false;
 	if (InEnvironment && LightTarget)
 	{
-		InEnvironment->SetLightBuffers(LightTarget, PositionTarget);
+		InEnvironment->SetLightBuffers(LightTarget, PositionTarget, OwnGlowTarget, HaloTarget);
 	}
 }
 
@@ -39,9 +42,47 @@ void UOnyxLightingSubsystem::RegisterLight(UOnyxLight2DComponent* Light)
 	Lights.AddUnique(Light);
 }
 
+TArray<const UOnyxPixelLightComponent*> UOnyxLightingSubsystem::GetPixelLights() const
+{
+	TArray<const UOnyxPixelLightComponent*> Result;
+	for (const TWeakObjectPtr<UOnyxPixelLightComponent>& Light : PixelLights)
+	{
+		if (const UOnyxPixelLightComponent* Component = Light.Get())
+		{
+			Result.Add(Component);
+		}
+	}
+	return Result;
+}
+
+void UOnyxLightingSubsystem::RegisterPixelLight(UOnyxPixelLightComponent* Light)
+{
+	PixelLights.AddUnique(Light);
+}
+
+void UOnyxLightingSubsystem::UnregisterPixelLight(UOnyxPixelLightComponent* Light)
+{
+	PixelLights.Remove(Light);
+}
+
 void UOnyxLightingSubsystem::UnregisterLight(UOnyxLight2DComponent* Light)
 {
 	Lights.Remove(Light);
+	ShadowCaches.Remove(TObjectKey<UOnyxLight2DComponent>(Light));
+}
+
+TArray<const UOnyxLight2DComponent*> UOnyxLightingSubsystem::GetLights() const
+{
+	TArray<const UOnyxLight2DComponent*> Result;
+	Result.Reserve(Lights.Num());
+	for (const TWeakObjectPtr<UOnyxLight2DComponent>& Light : Lights)
+	{
+		if (const UOnyxLight2DComponent* Component = Light.Get())
+		{
+			Result.Add(Component);
+		}
+	}
+	return Result;
 }
 
 void UOnyxLightingSubsystem::SetOccluders(const UObject* Owner, TArray<FOnyxOccluderSegment>&& Segments)
@@ -67,6 +108,7 @@ const TArray<FOnyxOccluderSegment>& UOnyxLightingSubsystem::GetAllOccluders()
 	}
 	if (bOccludersDirty)
 	{
+		++OccluderVersion; // every kept shadow is out of date
 		AllOccluders.Reset();
 		for (const TPair<TWeakObjectPtr<const UObject>, TArray<FOnyxOccluderSegment>>& Set : OccluderSets)
 		{
@@ -193,15 +235,19 @@ void UOnyxLightingSubsystem::EnsureTargets(const FIntPoint& ViewportSize)
 	{
 		LightTarget->ResizeTarget(Width, Height);
 		PositionTarget->ResizeTarget(Width, Height);
+		OwnGlowTarget->ResizeTarget(Width, Height);
+		HaloTarget->ResizeTarget(Width, Height);
 	}
 	else
 	{
 		LightTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, Width, Height, RTF_RGBA16f, FLinearColor::Black);
 		PositionTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, Width, Height, RTF_RGBA16f, FLinearColor::Black);
+		OwnGlowTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, Width, Height, RTF_RGBA16f, FLinearColor::Black);
+		HaloTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, Width, Height, RTF_RGBA16f, FLinearColor::Black);
 	}
 	if (AOnyxLightingEnvironment* Target = Environment.Get())
 	{
-		Target->SetLightBuffers(LightTarget, PositionTarget);
+		Target->SetLightBuffers(LightTarget, PositionTarget, OwnGlowTarget, HaloTarget);
 	}
 }
 
@@ -244,7 +290,34 @@ void UOnyxLightingSubsystem::Tick(float DeltaTime)
 			It.RemoveCurrent();
 		}
 	}
-	FOnyxLightBufferRenderer::Render(GetWorld(), View, LightTarget, PositionTarget, Falloff, Visible, GetAllOccluders(), Current.LightStrength);
+	// Pixel lights: this frame's light of each, where its sprite is.
+	TArray<FOnyxPixelLightQuad, TInlineAllocator<16>> Quads;
+	for (auto It = PixelLights.CreateIterator(); It; ++It)
+	{
+		if (const UOnyxPixelLightComponent* Light = It->Get())
+		{
+			FOnyxPixelLightQuad Quad;
+			if (Light->GetLightQuad(Quad))
+			{
+				Quads.Add(Quad);
+			}
+		}
+		else
+		{
+			It.RemoveCurrent();
+		}
+	}
+	const TArray<FOnyxOccluderSegment>& Occluders = GetAllOccluders();
+	FOnyxLightBufferRenderer::Render(GetWorld(), View, LightTarget, PositionTarget, OwnGlowTarget, Falloff, Visible, Occluders, Current.LightStrength,
+		&ShadowCaches, OccluderVersion, &LastStats, Quads, HaloTarget);
+	// Every few seconds, what it costs (LogOnyxLighting at Verbose): how many shadows were kept rather than worked out again.
+	StatsLogTimer -= DeltaTime;
+	if (StatsLogTimer <= 0.f && GetWorld()->IsGameWorld())
+	{
+		StatsLogTimer = 5.f;
+		UE_LOG(LogOnyxLighting, Verbose, TEXT("%d of %d lights drawn, %d shadows kept, %d worked out, %d wall edges, %d pixel lights"), LastStats.Drawn, Visible.Num(),
+			LastStats.ShadowsReused, LastStats.ShadowsComputed, Occluders.Num(), LastStats.PixelLightsDrawn);
+	}
 }
 
 TStatId UOnyxLightingSubsystem::GetStatId() const

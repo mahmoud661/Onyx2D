@@ -1,6 +1,7 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "Core/OnyxWorldSubsystem.h"
+#include "AI/OnyxBossComponent.h"
 #include "Camera/OnyxCameraBounds.h"
 #include "Components/PrimitiveComponent.h"
 
@@ -69,4 +70,14 @@ FBox UOnyxWorldSubsystem::GetLevelBounds() const
 		}
 	}
 	return Result;
+}
+
+void UOnyxWorldSubsystem::SetActiveBoss(UOnyxBossComponent* Boss)
+{
+	ActiveBoss = Boss;
+}
+
+UOnyxBossComponent* UOnyxWorldSubsystem::GetActiveBoss() const
+{
+	return ActiveBoss.Get();
 }

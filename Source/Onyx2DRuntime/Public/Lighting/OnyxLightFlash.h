@@ -20,10 +20,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Onyx2D")
 	TObjectPtr<UOnyxLight2DComponent> Light2D;
 
-	/** Spawns a flash at Location that fades out over Duration seconds. */
+	/** Spawns a flash at Location that fades out over Duration seconds. bOwnGlow: a character's own (its blade's), see Onyx Light 2D. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Lighting", meta = (WorldContext = "WorldContext"))
 	static AOnyxLightFlash* Spawn(UObject* WorldContext, FVector Location, FLinearColor Color = FLinearColor(1.f, 0.8f, 0.5f),
-		float Intensity = 3.f, float Radius = 350.f, float Duration = 0.2f, bool bCastShadows = false);
+		float Intensity = 3.f, float Radius = 350.f, float Duration = 0.2f, bool bCastShadows = false, bool bOwnGlow = false);
 
 	virtual void Tick(float DeltaSeconds) override;
 

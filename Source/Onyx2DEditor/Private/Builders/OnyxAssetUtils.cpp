@@ -101,7 +101,7 @@ UObject* FOnyxAssetUtils::CreateOrReuseAsset(UClass* Class, const FString& Folde
 }
 
 UPaperSprite* FOnyxAssetUtils::CreateSprite(const FString& Folder, const FString& Name, UTexture2D* Texture, FIntPoint Offset, FIntPoint Size,
-	float PixelsPerUnit, ESpritePivotMode::Type Pivot)
+	float PixelsPerUnit, ESpritePivotMode::Type Pivot, UMaterialInterface* Material, const FVector2D& CustomPivot)
 {
 	UPaperSprite* Sprite = CreateOrReuse<UPaperSprite>(Folder, Name);
 	if (!Sprite || !Texture)
@@ -115,8 +115,9 @@ UPaperSprite* FOnyxAssetUtils::CreateSprite(const FString& Folder, const FString
 	Params.Offset = Offset;
 	Params.Dimension = Size;
 	Params.SetPixelsPerUnrealUnit(PixelsPerUnit);
+	Params.DefaultMaterialOverride = Material;
 	Sprite->InitializeSprite(Params, false);
-	Sprite->SetPivotMode(Pivot, FVector2D::ZeroVector, false);
+	Sprite->SetPivotMode(Pivot, CustomPivot, false);
 
 	// Character frames should not carry their own collision; the capsule handles that.
 	if (FByteProperty* CollisionProperty = FindFProperty<FByteProperty>(UPaperSprite::StaticClass(), TEXT("SpriteCollisionDomain")))
@@ -126,6 +127,29 @@ UPaperSprite* FOnyxAssetUtils::CreateSprite(const FString& Folder, const FString
 	Sprite->PostEditChange();
 	Sprite->MarkPackageDirty();
 	return Sprite;
+}
+
+bool FOnyxAssetUtils::SetSpriteSocket(UPaperSprite* Sprite, FName Name, const FVector2D& Pixel)
+{
+	// Paper2D keeps a sprite's sockets to its own editor: reach them through their property.
+	FArrayProperty* Property = Sprite && !Name.IsNone() ? FindFProperty<FArrayProperty>(UPaperSprite::StaticClass(), TEXT("Sockets")) : nullptr;
+	if (!Property)
+	{
+		return false;
+	}
+	TArray<FPaperSpriteSocket>& Sockets = *Property->ContainerPtrToValuePtr<TArray<FPaperSpriteSocket>>(Sprite);
+	// Sockets live in pivot space: pixels from the pivot, X right and up the second axis (Paper2D's X and Z).
+	const FVector2D Pivoted = Sprite->ConvertTextureSpaceToPivotSpace(Sprite->GetSourceUV() + Pixel);
+	Sprite->Modify();
+	FPaperSpriteSocket* Socket = Sockets.FindByPredicate([Name](const FPaperSpriteSocket& Each) { return Each.SocketName == Name; });
+	if (!Socket)
+	{
+		Socket = &Sockets.AddDefaulted_GetRef();
+		Socket->SocketName = Name;
+	}
+	Socket->LocalTransform = FTransform(FVector(Pivoted.X, 0.f, Pivoted.Y));
+	Sprite->MarkPackageDirty();
+	return true;
 }
 
 UPaperFlipbook* FOnyxAssetUtils::CreateFlipbook(const FString& Folder, const FString& Name, const TArray<UPaperSprite*>& Frames, float FramesPerSecond)

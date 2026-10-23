@@ -22,6 +22,7 @@ AOnyxSign::AOnyxSign()
 	Trigger->SetCollisionResponseToAllChannels(ECR_Ignore);
 	Trigger->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
 	Trigger->SetCanEverAffectNavigation(false);
+	Trigger->bDrawOnlyIfSelected = true;
 	RootComponent = Trigger;
 
 	Sprite = CreateDefaultSubobject<UPaperSpriteComponent>(TEXT("Sprite"));

@@ -83,6 +83,8 @@ private:
 	FBox2D GetLevelArea() const;
 	/** Zone first, then the level; switching zones blends the correction instead of jumping. */
 	FVector2D Confine(const FVector2D& Framed, const FVector2D& ViewHalf, const AOnyxCameraBounds* Zone, float DeltaTime);
+	/** Leans the view towards the zone's Focus Actors (a boss), as far as it can without losing the player. */
+	FVector2D FrameFocus(const FVector2D& Framed, const FOnyxCameraTarget& Target, const FVector2D& ViewHalf, const AOnyxCameraBounds* Zone, float DeltaTime);
 	void ApplyTransform(const FVector2D& Center, const FVector& ShakeOffset);
 
 	FOnyxCameraFraming Framing;
@@ -95,6 +97,8 @@ private:
 	float BlendDuration = 0.f;
 
 	TWeakObjectPtr<const AOnyxCameraBounds> ConfineZone;
+	/** How far the view leans towards focus actors now (eased in and out). */
+	FVector2D FocusOffset = FVector2D::ZeroVector;
 	FVector2D ConfineCorrection = FVector2D::ZeroVector;
 	FVector2D ConfineBlendFrom = FVector2D::ZeroVector;
 	float ConfineBlendElapsed = 0.f;

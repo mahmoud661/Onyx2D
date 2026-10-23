@@ -68,12 +68,14 @@ public:
 
 	/**
 	 * Builds a character from one strip per animation (e.g. Idle, Run, Jump, Fall, Crouch, Hurt), as made by
-	 * PackFramesIntoStrip. FramesPerSecond can override the speed of any animation.
+	 * PackFramesIntoStrip. FramesPerSecond can override the speed of any animation. FeetRowsFromBottom: art drawn on one
+	 * ground line (every frame the same size, the feet that many rows above its bottom) keeps it in every clip, jumps and
+	 * rolls included; -1 finds each clip's own from its lowest visible pixels.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Editor")
 	static UBlueprint* CreateCharacterFromStrips(const TMap<FName, UTexture2D*>& Strips, const FString& Name, const FString& Folder, FIntPoint FrameSize,
 		UPARAM(meta = (Bitmask, BitmaskEnum = "/Script/Onyx2DRuntime.EOnyxBehaviour")) int32 Behaviours, uint8 Team, float CentimetersPerPixel,
-		const TMap<FName, float>& FramesPerSecond);
+		const TMap<FName, float>& FramesPerSecond, int32 FeetRowsFromBottom = -1, bool bFitToBody = false);
 
 	/** Imports a Tiled JSON map (.json / .tmj) as a Paper2D tile map using TileSet, optionally placing it in the level. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Editor")
@@ -83,6 +85,9 @@ public:
 	/** Sets the collision type (None, Solid, OneWay, Hazard) of tiles by index. */
 	UFUNCTION(BlueprintCallable, Category = "Onyx2D|Editor")
 	static void SetTileCollision(UPaperTileSet* TileSet, const TArray<int32>& TileIndices, EOnyxTileCollision Collision);
+
+	/** Makes tiles Edge tiles blocking these sides (EOnyxTileEdge bits: 1 north, 2 east, 4 south, 8 west), and saves the set. */
+	static void SetTileEdges(UPaperTileSet* TileSet, const TArray<int32>& TileIndices, uint8 Edges);
 
 	/**
 	 * Makes an auto-tiling terrain from a 3 x 3 template in the tile sheet (5 x 5 when the sheet has gaps

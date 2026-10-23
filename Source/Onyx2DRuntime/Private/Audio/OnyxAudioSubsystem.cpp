@@ -14,6 +14,8 @@
 #include "Sound/SoundBase.h"
 #include "UObject/StrongObjectPtr.h"
 
+DEFINE_LOG_CATEGORY_STATIC(LogOnyxAudio, Log, All);
+
 UOnyxAudioSubsystem* UOnyxAudioSubsystem::Get(const UObject* WorldContext)
 {
 	const UWorld* World = WorldContext ? WorldContext->GetWorld() : nullptr;
@@ -67,6 +69,7 @@ void UOnyxAudioSubsystem::PlaySoundAt(const UObject* WorldContext, USoundBase* S
 {
 	if (Sound && WorldContext)
 	{
+		UE_LOG(LogOnyxAudio, Verbose, TEXT("%s (volume %.2f, pitch %.2f)"), *Sound->GetName(), Volume * GetCategoryVolume(Category), Pitch);
 		UGameplayStatics::PlaySoundAtLocation(WorldContext, Sound, Location, FRotator::ZeroRotator, Volume * GetCategoryVolume(Category), Pitch, 0.f, GetWorldAttenuation());
 	}
 }
@@ -79,6 +82,8 @@ UAudioComponent* UOnyxAudioSubsystem::PlaySoundAttached(USoundBase* Sound, UScen
 	}
 	UAudioComponent* Component = UGameplayStatics::SpawnSoundAttached(Sound, AttachTo, NAME_None, FVector::ZeroVector, EAttachLocation::KeepRelativeOffset,
 		false, Volume * GetCategoryVolume(Category), Pitch, 0.f, GetWorldAttenuation());
+	UE_LOG(LogOnyxAudio, Verbose, TEXT("%s on %s (looping %d, playing %d)"), *Sound->GetName(), *GetNameSafe(AttachTo->GetOwner()), Sound->IsLooping() ? 1 : 0,
+		Component && Component->IsPlaying() ? 1 : 0);
 	if (UOnyxAudioSubsystem* Audio = Get(AttachTo); Audio && Component)
 	{
 		Audio->Loops.RemoveAll([](const FLoop& Loop) { return !Loop.Component.IsValid(); });
@@ -122,6 +127,7 @@ void UOnyxAudioSubsystem::StartTrack(FOnyxAudioChannel& Channel, USoundBase* Sou
 	}
 	// Persists across level loads, so a track shared by two levels doesn't restart.
 	Channel.Track = UGameplayStatics::CreateSound2D(GetGameInstance(), Sound, 1.f, 1.f, 0.f, nullptr, true, true);
+	UE_LOG(LogOnyxAudio, Verbose, TEXT("%s track: %s"), Channel.Category == EOnyxSoundCategory::Music ? TEXT("Music") : TEXT("Ambience"), *Sound->GetName());
 	if (Channel.Track)
 	{
 		Channel.TrackVolume = Volume;

@@ -5,11 +5,14 @@
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
 
+class SVerticalBox;
+
 DECLARE_DELEGATE_OneParam(FOnOnyxOpenTool, FName /*TabId*/);
 
 /**
- * The start page: the steps from art to a playable level (each one a button), the example level, and how to extend
- * Onyx2D with your own Blueprints or C++ classes (where the code goes, one-click creation from every Onyx base class).
+ * The start page: the steps from art to a playable level (each one a button), the cards other modules add (the Onyx2D
+ * Examples plugin's example levels), and how to extend Onyx2D with your own Blueprints or C++ classes (where the code goes,
+ * one-click creation from every Onyx base class).
  */
 class SOnyxHomeTool : public SCompoundWidget
 {
@@ -23,7 +26,9 @@ public:
 private:
 	TSharedRef<SWidget> MakeHeader();
 	TSharedRef<SWidget> MakeSteps();
-	TSharedRef<SWidget> MakeStep(int32 Number, const FText& Title, const FText& Description, const TSharedRef<SWidget>& Actions);
+	/** Shows the cards other modules added (FOnyxEditorExtensions). */
+	void RebuildCards();
+	TSharedRef<SWidget> MakeStep(int32 Number, const FText& Title, const FText& Description, const TSharedRef<SWidget>& Actions, bool bActionsBelow = false);
 	TSharedRef<SWidget> MakeExtend();
 	TSharedRef<SWidget> MakeBaseClassRow(UClass* Class, const FText& Label, const FText& Description);
 	TSharedRef<SWidget> Button(const FText& Label, const FText& Tooltip, TFunction<void()> OnClicked, bool bPrimary = false);
@@ -40,4 +45,5 @@ private:
 	FOnOnyxOpenTool OnOpenToolDelegate;
 	/** Per step (index = step number): done in this project / level. */
 	TArray<bool> Done;
+	TSharedPtr<SVerticalBox> CardsBox;
 };

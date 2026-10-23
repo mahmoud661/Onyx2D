@@ -37,6 +37,15 @@ public:
 		SLATE_ATTRIBUTE(bool, ShowGrid)
 		/** Overlay the effective collision of every cell. */
 		SLATE_ATTRIBUTE(bool, ShowCollision)
+		/**
+		 * Parallax preview: the image layers where the game shows them with its camera at the middle of this view (they slide
+		 * as the view pans). Off: where they are with the camera where it starts.
+		 */
+		SLATE_ATTRIBUTE(bool, ShowParallax)
+		/** The image layer (index in the level's Onyx Parallax Background) being edited: outlined, with corner handles. */
+		SLATE_ATTRIBUTE(int32, SelectedImageLayer)
+		/** Image layers hidden in this view only (the game still draws them). */
+		SLATE_ATTRIBUTE(TSet<int32>, HiddenImageLayers)
 		SLATE_ATTRIBUTE(TSet<FName>, HiddenObjectLayers)
 		SLATE_ATTRIBUTE(TSet<int32>, HiddenLayers)
 		/** Tiles drawn under the cursor as a preview (invalid = none). */
@@ -62,6 +71,17 @@ public:
 	FVector2D GetHoverMapPixels() const { return (HoverLocal - Pan) / FMath::Max(Zoom, 0.01f); }
 	bool IsHovering() const { return bHasHover; }
 	float GetZoom() const { return Zoom; }
+	FVector2D LocalToMapPixels(const FVector2D& Local) const { return (Local - Pan) / FMath::Max(Zoom, 0.01f); }
+	/** The middle of the view, in map pixels. */
+	FVector2D GetViewCenterMapPixels() const { return LocalToMapPixels(LastArea * 0.5); }
+	/**
+	 * How far the game's camera is now from where it started (cm, X and Z), for the parallax preview: at the middle of this
+	 * view and at the player start, both kept where the camera can be (its view inside the map). Zero with the preview off.
+	 * Every image layer is moved by its Factor of it.
+	 */
+	FVector GetParallaxCameraDelta() const;
+	/** Where an image layer's own picture shows now (map pixels): for a repeating one, the copy around its middle. */
+	TOptional<FBox2D> GetImageLayerRect(int32 LayerIndex) const;
 
 	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
 		FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
@@ -84,6 +104,16 @@ private:
 	void FitTo(const FVector2D& Area) const;
 	void DrawTile(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, const FPaperTileInfo& Tile,
 		const FVector2f& Position, float Size, const FLinearColor& Tint) const;
+	/**
+	 * The image layers (the level's Onyx Parallax Background) behind the tiles, farthest first, inside the map (the game's
+	 * camera never looks past it), each where the game shows it for the parallax preview, tinted by the level's mood.
+	 * Returns the next free layer id.
+	 */
+	int32 DrawParallax(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, const FVector2D& Area, const FVector2f& MapMin,
+		const FVector2f& MapPixels) const;
+	const class AOnyxParallaxBackground* FindParallax() const;
+	/** Half the game's view (cm): from the player's Onyx camera (the level's game mode's pawn), else the camera's default. */
+	FVector2D GetGameViewHalfSize(UWorld* World) const;
 	/** Draws a brush on a cell: the sprite for sprite/flipbook brushes, a colored box + icon otherwise. */
 	/** Draws an actor's sprites where they are in the level (animated); false if it shows none. Out = the area covered. */
 	bool DrawActorSprites(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, const AActor* Actor,
@@ -108,6 +138,9 @@ private:
 	FOnyxMapPainter* Painter = nullptr;
 	TAttribute<bool> ShowGrid;
 	TAttribute<bool> ShowCollision;
+	TAttribute<bool> ShowParallax;
+	TAttribute<int32> SelectedImageLayer;
+	TAttribute<TSet<int32>> HiddenImageLayers;
 	TAttribute<TSet<FName>> HiddenObjectLayers;
 	TAttribute<TSet<int32>> HiddenLayers;
 	TAttribute<FOnyxStamp> PreviewStamp;
@@ -127,6 +160,15 @@ private:
 	mutable bool bFitRequested = true;
 	mutable FSlateBrush TileBrush;
 	mutable FSlateBrush SpriteBrush;
+	mutable FSlateBrush ParallaxBrush;
+	mutable TWeakObjectPtr<const class AOnyxParallaxBackground> ParallaxActor;
+	mutable TWeakObjectPtr<UWorld> ViewSizeWorld;
+	/** The view's size at the last paint. */
+	mutable FVector2D LastArea = FVector2D(400.0, 300.0);
+	/** Fitted to the view and nothing moved it since: it fits again when the view changes size (panels shown or hidden). */
+	mutable bool bKeepFitted = false;
+	mutable FVector2D FittedArea = FVector2D::ZeroVector;
+	mutable FVector2D ViewHalfSize = FVector2D::ZeroVector;
 	/** The map and where its top-left corner was in the level at the last paint (see FollowMapCorner). */
 	mutable TWeakObjectPtr<UPaperTileMap> CornerMap;
 	mutable TOptional<FVector> CornerInLevel;

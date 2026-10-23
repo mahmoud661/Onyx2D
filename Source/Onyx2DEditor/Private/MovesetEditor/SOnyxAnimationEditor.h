@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "EditorUndoClient.h"
+#include "Lighting/OnyxPixelLightSet.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Views/SListView.h"
 
@@ -13,6 +14,8 @@ class SOnyxFlipbookPreview;
 class FOnyxClipTimelineModel;
 class SOnyxClipTimeline;
 class STableViewBase;
+class SWrapBox;
+class UPaperSprite;
 class UBlueprint;
 class UOnyxClipEvent;
 class UOnyxClip;
@@ -24,7 +27,8 @@ class UTexture2D;
  *  - left: the Moveset's clips by role; missing standard roles (Idle, Run, Jump...) are one click away;
  *  - middle: big preview with transport controls, and the timeline (frames with holds, events at exact times);
  *  - right: the clip's settings, the selected frame and the selected event (message, sound, effect...).
- * New Clip cuts frames from a sprite sheet; New Character makes a playable character from the moveset.
+ * New Clip cuts frames from a sprite sheet; New Character makes a playable character from the moveset. Pixel Light makes
+ * chosen colours of the art (a blade) give light in every frame, and can make only them glow.
  */
 class SOnyxAnimationEditor : public SCompoundWidget, public FSelfRegisteringEditorUndoClient
 {
@@ -79,6 +83,16 @@ private:
 	void Save();
 	FString GetFolder() const;
 
+	// Pixel Light: chosen colours of the art give light.
+	TSharedRef<SWidget> MakePixelLightPanel();
+	/** The frame on show in the preview. */
+	UPaperSprite* GetShownSprite() const;
+	/** The colours of the frame on show, to choose from (only when the frame changed). */
+	void RefreshSwatches();
+	void BuildPixelLight();
+	void MakeGlowMask();
+	FString GetPixelLightName() const;
+
 	TWeakObjectPtr<UOnyxMoveset> Set;
 	TWeakObjectPtr<UBlueprint> Character;
 	/** A sequence opened on its own (not in the set being edited). */
@@ -93,4 +107,8 @@ private:
 	TSharedPtr<FOnyxClipTimelineModel> TimelineModel;
 	TSharedPtr<SOnyxClipTimeline> Timeline;
 	TSharedPtr<IDetailsView> NotifyDetails;
+	TSharedPtr<SWrapBox> Swatches;
+	TWeakObjectPtr<UPaperSprite> SwatchSprite;
+	TMap<TWeakObjectPtr<UPaperSprite>, TArray<TPair<FColor, int32>>> ColourCache;
+	FOnyxPixelLightRecipe PixelLight;
 };

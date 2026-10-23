@@ -11,6 +11,10 @@
 #include "AssetTools/OnyxMovesetAssets.h"
 #include "Builders/OnyxAssetUtils.h"
 #include "Builders/OnyxCharacterBuilder.h"
+#include "Builders/OnyxContentKit.h"
+#include "Builders/OnyxPixelLightBuilder.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Lighting/OnyxPixelLightComponent.h"
 #include "Character/OnyxBehaviourLibrary.h"
 #include "Character/OnyxCharacter.h"
 #include "Combat/OnyxCombatTypes.h"
@@ -21,6 +25,7 @@
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "IContentBrowserSingleton.h"
 #include "IDetailsView.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Misc/PackageName.h"
 #include "PaperFlipbook.h"
 #include "PaperSprite.h"
@@ -37,8 +42,10 @@
 #include "Widgets/Input/SNumericEntryBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSplitter.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "ToolsWindow/OnyxToolWidgets.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOnyxBehaviourPicker.h"
@@ -93,6 +100,51 @@ namespace
 					SNew(STextBlock).Text(Title).Font(Font(10, true))
 				]
 				+ SVerticalBox::Slot().AutoHeight()
+				[
+					Content
+				]
+			];
+	}
+
+	/** Where the Moveset Editor keeps what you left open (Editor Per Project User Settings). */
+	const TCHAR* AnimEditorConfigSection = TEXT("Onyx2D.MovesetEditor");
+
+	/**
+	 * A box like AnimEditorBox that folds: only its header (Title, and Summary muted beside it) until clicked open. For tools
+	 * used now and then, which shouldn't take the panel's room; it stays as you left it, by Key.
+	 */
+	TSharedRef<SWidget> AnimEditorFoldout(const FText& Title, const FText& Summary, const TCHAR* Key, const TSharedRef<SWidget>& Content,
+		TAttribute<EVisibility> Visibility = EVisibility::Visible)
+	{
+		bool bOpen = false;
+		GConfig->GetBool(AnimEditorConfigSection, Key, bOpen, GEditorPerProjectIni);
+		const FString KeyName(Key);
+		return SNew(SBox)
+			.Visibility(Visibility)
+			[
+				SNew(SExpandableArea)
+				.InitiallyCollapsed(!bOpen)
+				.BorderImage(FAppStyle::GetBrush("Brushes.Panel"))
+				.BodyBorderImage(FAppStyle::GetBrush("Brushes.Panel"))
+				.HeaderPadding(FMargin(8.f, 7.f))
+				.Padding(FMargin(10.f, 2.f, 10.f, 8.f))
+				.OnAreaExpansionChanged_Lambda([KeyName](bool bExpanded)
+				{
+					GConfig->SetBool(AnimEditorConfigSection, *KeyName, bExpanded, GEditorPerProjectIni);
+				})
+				.HeaderContent()
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+					[
+						SNew(STextBlock).Text(Title).Font(Font(10, true))
+					]
+					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
+					[
+						SNew(STextBlock).Text(Summary).ColorAndOpacity(Muted()).OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+					]
+				]
+				.BodyContent()
 				[
 					Content
 				]
@@ -436,7 +488,225 @@ TSharedRef<SWidget> SOnyxAnimationEditor::MakeSidePanel()
 					Hint(INVTEXT("Click a frame in the timeline to change its hold or sprite. Right-click a lane to add a message, a sound, an effect or a window at that time; click an event to edit it."))
 				]
 			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+			[
+				MakePixelLightPanel()
+			]
 		];
+}
+
+TSharedRef<SWidget> SOnyxAnimationEditor::MakePixelLightPanel()
+{
+	constexpr float PixelLabelWidth = 100.f; // "Painted mask" fits
+	// Folded away until wanted: most clips never need it.
+	return AnimEditorFoldout(INVTEXT("Pixel Light"), INVTEXT("make part of the art a light"), TEXT("PixelLightOpen"),
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
+		[
+			Hint(INVTEXT("Light from chosen pixels of the art: pick the colours that give light (a blade, a lantern's glass) in the frame on show, then Build. Every frame where they show lights the world around them, shaped like them."))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
+		[
+			SAssignNew(Swatches, SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(3.f, 3.f))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
+		[
+			SNew(STextBlock).ColorAndOpacity(Muted()).AutoWrapText(true).Text_Lambda([this]()
+			{
+				if (PixelLight.bFromPaintedMask)
+				{
+					return INVTEXT("Pixels from the glow mask painted beside each texture (<texture>_GlowMask).");
+				}
+				return PixelLight.Colors.IsEmpty() ? INVTEXT("No colours chosen: click the swatches above.")
+					: FText::Format(INVTEXT("{0} colours give light."), PixelLight.Colors.Num());
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+		[
+			AnimEditorLabeled(INVTEXT("Spread"), SNew(SNumericEntryBox<int32>)
+				.ToolTipText(INVTEXT("How far the light spreads from those pixels, in art pixels."))
+				.MinValue(1).MaxValue(64).AllowSpin(true).MinSliderValue(1).MaxSliderValue(40)
+				.Value_Lambda([this]() { return PixelLight.Spread; })
+				.OnValueChanged_Lambda([this](int32 Value) { PixelLight.Spread = Value; })
+				.OnValueCommitted_Lambda([this](int32 Value, ETextCommit::Type) { PixelLight.Spread = Value; }), PixelLabelWidth)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+		[
+			AnimEditorLabeled(INVTEXT("Tolerance"), SNew(SNumericEntryBox<float>)
+				.ToolTipText(INVTEXT("How close a colour must be to one chosen to count (0: exactly)."))
+				.MinValue(0.f).MaxValue(1.f).AllowSpin(true).MinSliderValue(0.f).MaxSliderValue(0.25f)
+				.Value_Lambda([this]() { return PixelLight.Tolerance; })
+				.OnValueChanged_Lambda([this](float Value) { PixelLight.Tolerance = Value; })
+				.OnValueCommitted_Lambda([this](float Value, ETextCommit::Type) { PixelLight.Tolerance = Value; }), PixelLabelWidth)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+		[
+			AnimEditorLabeled(INVTEXT("Brightness"), SNew(SNumericEntryBox<float>)
+				.ToolTipText(INVTEXT("Also every pixel brighter than this (0: off), for art without set colours."))
+				.MinValue(0.f).MaxValue(1.f).AllowSpin(true).MinSliderValue(0.f).MaxSliderValue(1.f)
+				.Value_Lambda([this]() { return PixelLight.MinBrightness; })
+				.OnValueChanged_Lambda([this](float Value) { PixelLight.MinBrightness = Value; })
+				.OnValueCommitted_Lambda([this](float Value, ETextCommit::Type) { PixelLight.MinBrightness = Value; }), PixelLabelWidth)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+		[
+			AnimEditorLabeled(INVTEXT("Own colours"), SNew(SCheckBox)
+				.ToolTipText(INVTEXT("The light takes the colour of the pixels it comes from (off: white)."))
+				.IsChecked_Lambda([this]() { return PixelLight.bPixelColours ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+				.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { PixelLight.bPixelColours = State == ECheckBoxState::Checked; }), PixelLabelWidth)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+		[
+			AnimEditorLabeled(INVTEXT("Painted mask"), SNew(SCheckBox)
+				.ToolTipText(INVTEXT("Take the pixels from a glow mask painted for the art instead of the colours: a copy of each texture, white where it gives light, black elsewhere, imported beside it as <texture>_GlowMask. For a part whose colours others share (a spear painted with the hair's colours)."))
+				.IsChecked_Lambda([this]() { return PixelLight.bFromPaintedMask ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+				.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { PixelLight.bFromPaintedMask = State == ECheckBoxState::Checked; }), PixelLabelWidth)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 4.f, 0.f)
+			[
+				SNew(SButton).Text(INVTEXT("Build Pixel Light"))
+				.ToolTipText(INVTEXT("Makes the light of every frame (a Pixel Light Set next to the moveset). A character open here gets an Onyx Pixel Light that plays it."))
+				.IsEnabled_Lambda([this]() { return Set.IsValid() && PixelLight.NamesPixels(); })
+				.OnClicked_Lambda([this]() { BuildPixelLight(); return FReply::Handled(); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SButton).Text(INVTEXT("Glow Mask"))
+				.ToolTipText(INVTEXT("Only those pixels glow by themselves (Glowing Pixels from the mask), not every bright pixel."))
+				.IsEnabled_Lambda([this]() { return Set.IsValid() && PixelLight.NamesPixels(); })
+				.OnClicked_Lambda([this]() { MakeGlowMask(); return FReply::Handled(); })
+			]
+		],
+		TAttribute<EVisibility>::CreateLambda([this]() { return Set.IsValid() ? EVisibility::Visible : EVisibility::Collapsed; }));
+}
+
+UPaperSprite* SOnyxAnimationEditor::GetShownSprite() const
+{
+	const UOnyxClip* Sequence = GetSequence();
+	const UPaperFlipbook* Flipbook = Sequence ? Sequence->Flipbook.Get() : nullptr;
+	return Flipbook && Flipbook->GetNumKeyFrames() > 0 ? Flipbook->GetSpriteAtFrame(FMath::Max(TimelineModel->GetUnitAt(TimelineModel->GetTime()), 0)) : nullptr;
+}
+
+void SOnyxAnimationEditor::RefreshSwatches()
+{
+	UPaperSprite* Sprite = GetShownSprite();
+	if (!Swatches.IsValid() || Sprite == SwatchSprite.Get())
+	{
+		return;
+	}
+	SwatchSprite = Sprite;
+	Swatches->ClearChildren();
+	if (!Sprite)
+	{
+		return;
+	}
+	TArray<TPair<FColor, int32>>* Colours = ColourCache.Find(Sprite);
+	if (!Colours)
+	{
+		Colours = &ColourCache.Add(Sprite, FOnyxPixelLightBuilder::CountColours(Sprite));
+	}
+	// The frame's colours, the most used first; the chosen ones ringed.
+	const int32 Shown = FMath::Min(Colours->Num(), 40);
+	for (int32 Index = 0; Index < Shown; ++Index)
+	{
+		const FColor Colour = (*Colours)[Index].Key;
+		const int32 Count = (*Colours)[Index].Value;
+		Swatches->AddSlot()
+		[
+			SNew(SBorder)
+			.Padding(2.f)
+			.BorderImage(FAppStyle::GetBrush("WhiteBrush"))
+			.BorderBackgroundColor_Lambda([this, Colour]() { return PixelLight.Colors.Contains(Colour) ? FLinearColor::White : FLinearColor(0.f, 0.f, 0.f, 0.f); })
+			[
+				SNew(SButton)
+				.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+				.ContentPadding(0.f)
+				.ToolTipText(FText::Format(INVTEXT("#{0} ({1} pixels): click to choose it, again to drop it"), FText::FromString(Colour.ToHex().Left(6)), Count))
+				.OnClicked_Lambda([this, Colour]()
+				{
+					if (!PixelLight.Colors.Remove(Colour))
+					{
+						PixelLight.Colors.Add(Colour);
+					}
+					return FReply::Handled();
+				})
+				[
+					SNew(SBox).WidthOverride(18.f).HeightOverride(18.f)
+					[
+						SNew(SImage).Image(FAppStyle::GetBrush("WhiteBrush")).ColorAndOpacity(FLinearColor(Colour))
+					]
+				]
+			]
+		];
+	}
+}
+
+FString SOnyxAnimationEditor::GetPixelLightName() const
+{
+	FString Folder;
+	FString Name;
+	FOnyxPixelLightBuilder::GetMovesetSetPath(Set.Get(), Folder, Name);
+	return Name;
+}
+
+void SOnyxAnimationEditor::BuildPixelLight()
+{
+	UOnyxMoveset* Current = Set.Get();
+	if (!Current)
+	{
+		return;
+	}
+	FText Error;
+	UOnyxPixelLightSet* Made = FOnyxPixelLightBuilder::BuildForMoveset(Current, PixelLight, GetFolder(), GetPixelLightName(), Error);
+	if (!Made)
+	{
+		Notify(Error, false);
+		return;
+	}
+	// The character open here plays it.
+	if (UBlueprint* Blueprint = Character.Get())
+	{
+		if (UOnyxPixelLightComponent* Light = FOnyxContentKit::AddComponent<UOnyxPixelLightComponent>(Blueprint, TEXT("PixelLight")))
+		{
+			Light->Modify();
+			Light->LightSet = Made;
+			FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+		}
+	}
+	Notify(FText::Format(INVTEXT("Pixel Light built: {0} frames give light{1}"), Made->Frames.Num(),
+		Character.IsValid() ? INVTEXT(", and the character plays it") : INVTEXT(" (add an Onyx Pixel Light to the character and give it this set)")), true);
+}
+
+void SOnyxAnimationEditor::MakeGlowMask()
+{
+	UOnyxMoveset* Current = Set.Get();
+	if (!Current)
+	{
+		return;
+	}
+	FText Error;
+	const int32 Given = FOnyxPixelLightBuilder::ApplyGlowMasks(FOnyxPixelLightBuilder::FlipbooksOf(Current), PixelLight, Error);
+	if (Given == 0)
+	{
+		Notify(Error, false);
+		return;
+	}
+	// The character open here glows from it.
+	if (UBlueprint* Blueprint = Character.Get())
+	{
+		if (AOnyxCharacter* Defaults = Blueprint->GeneratedClass ? Blueprint->GeneratedClass->GetDefaultObject<AOnyxCharacter>() : nullptr)
+		{
+			Defaults->Modify();
+			Defaults->bGlowFromMask = true;
+			Defaults->GlowPixels = Defaults->GlowPixels > 0.f ? Defaults->GlowPixels : 2.f; // past 1: they burn
+			Blueprint->MarkPackageDirty();
+		}
+	}
+	Notify(FText::Format(INVTEXT("Glow mask made for {0} frames{1}"), Given,
+		Character.IsValid() ? INVTEXT(": only those pixels glow now") : INVTEXT(" (turn on the character's Glow From Mask)")), true);
 }
 
 TSharedRef<ITableRow> SOnyxAnimationEditor::MakeRow(FEntryPtr Entry, const TSharedRef<STableViewBase>& Owner)
@@ -553,6 +823,16 @@ void SOnyxAnimationEditor::SetSet(UOnyxMoveset* NewSet)
 {
 	Set = NewSet;
 	SelectedName = NAME_None;
+	// Its Pixel Light, when it has one: carry on from how it was made.
+	PixelLight = FOnyxPixelLightRecipe();
+	if (NewSet)
+	{
+		const FString Path = GetFolder() / GetPixelLightName();
+		if (const UOnyxPixelLightSet* Existing = LoadObject<UOnyxPixelLightSet>(nullptr, *(Path + TEXT(".") + GetPixelLightName()), nullptr, LOAD_NoWarn | LOAD_Quiet))
+		{
+			PixelLight = Existing->Recipe;
+		}
+	}
 	Refresh();
 	if (NewSet)
 	{
@@ -670,6 +950,7 @@ EActiveTimerReturnType SOnyxAnimationEditor::Tick(double CurrentTime, float Delt
 	{
 		Preview->SetFrame(FMath::Clamp(TimelineModel->GetUnitAt(TimelineModel->GetTime()), 0, Preview->GetFrameCount() - 1));
 	}
+	RefreshSwatches();
 	return EActiveTimerReturnType::Continue;
 }
 

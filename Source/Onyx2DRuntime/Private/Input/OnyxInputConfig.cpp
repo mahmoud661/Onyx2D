@@ -1,6 +1,7 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "Input/OnyxInputConfig.h"
+#include "Core/Onyx2DSettings.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerController.h"
@@ -37,8 +38,16 @@ UOnyxInputConfig* UOnyxInputConfig::CreateDefault(UObject* Outer)
 	Config->Dash = MakeAction(Config, TEXT("IA_Dash"), TEXT("Dash"), EInputActionValueType::Boolean);
 	Config->Attack = MakeAction(Config, TEXT("IA_Attack"), TEXT("Attack"), EInputActionValueType::Boolean);
 	Config->Down = MakeAction(Config, TEXT("IA_Down"), TEXT("Drop Down"), EInputActionValueType::Boolean);
+	Config->Up = MakeAction(Config, TEXT("IA_Up"), TEXT("Aim Up"), EInputActionValueType::Boolean);
+	Config->Mend = MakeAction(Config, TEXT("IA_Mend"), TEXT("Mend"), EInputActionValueType::Boolean);
 	Config->Interact = MakeAction(Config, TEXT("IA_Interact"), TEXT("Interact"), EInputActionValueType::Boolean);
+	Config->Shoot = MakeAction(Config, TEXT("IA_Shoot"), TEXT("Shoot"), EInputActionValueType::Boolean);
+	Config->Throw = MakeAction(Config, TEXT("IA_Throw"), TEXT("Throw"), EInputActionValueType::Boolean);
+	Config->Aim = MakeAction(Config, TEXT("IA_Aim"), TEXT("Aim"), EInputActionValueType::Axis2D);
 	Config->Pause = MakeAction(Config, TEXT("IA_Pause"), TEXT("Pause"), EInputActionValueType::Boolean);
+	Config->HotbarNext = MakeAction(Config, TEXT("IA_HotbarNext"), TEXT("Next Item"), EInputActionValueType::Boolean);
+	Config->HotbarPrevious = MakeAction(Config, TEXT("IA_HotbarPrevious"), TEXT("Previous Item"), EInputActionValueType::Boolean);
+	Config->HotbarSlot = MakeAction(Config, TEXT("IA_HotbarSlot"), TEXT("Hotbar Slot"), EInputActionValueType::Axis1D);
 
 	UInputMappingContext* Context = NewObject<UInputMappingContext>(Config, TEXT("IMC_OnyxDefault"));
 	Config->MappingContext = Context;
@@ -55,9 +64,16 @@ UOnyxInputConfig* UOnyxInputConfig::CreateDefault(UObject* Outer)
 	Map(Context, Config->Vertical, EKeys::Gamepad_DPad_Up);
 
 	Map(Context, Config->Jump, EKeys::SpaceBar);
-	Map(Context, Config->Jump, EKeys::W);
-	Map(Context, Config->Jump, EKeys::Up);
 	Map(Context, Config->Jump, EKeys::Gamepad_FaceButton_Bottom);
+	// W and Up jump, or aim up (up-slashes) when the project wants Space to be the only jump.
+	UInputAction* UpKeys = UOnyx2DSettings::Get()->bUpKeysJump ? Config->Jump.Get() : Config->Up.Get();
+	Map(Context, UpKeys, EKeys::W);
+	Map(Context, UpKeys, EKeys::Up);
+
+	Map(Context, Config->Mend, EKeys::K);
+	Map(Context, Config->Mend, EKeys::F);
+	Map(Context, Config->Mend, EKeys::Gamepad_LeftShoulder);
+	Map(Context, Config->Mend, EKeys::Gamepad_LeftTrigger);
 
 	Map(Context, Config->Dash, EKeys::LeftShift);
 	Map(Context, Config->Dash, EKeys::L);
@@ -75,9 +91,39 @@ UOnyxInputConfig* UOnyxInputConfig::CreateDefault(UObject* Outer)
 	Map(Context, Config->Interact, EKeys::E);
 	Map(Context, Config->Interact, EKeys::Gamepad_FaceButton_Top);
 
+	// Above Attack, Mend and Dash (J K L): I shoots, U throws.
+	Map(Context, Config->Shoot, EKeys::I);
+	Map(Context, Config->Shoot, EKeys::RightMouseButton);
+	Map(Context, Config->Shoot, EKeys::Gamepad_RightTrigger);
+	Map(Context, Config->Throw, EKeys::U);
+	Map(Context, Config->Throw, EKeys::MiddleMouseButton);
+	Map(Context, Config->Throw, EKeys::Gamepad_LeftThumbstick);
+	Map(Context, Config->Aim, EKeys::Gamepad_Right2D);
+
+	Map(Context, Config->HotbarNext, EKeys::MouseScrollDown);
+	Map(Context, Config->HotbarNext, EKeys::R);
+	Map(Context, Config->HotbarNext, EKeys::Gamepad_RightTrigger);
+	Map(Context, Config->HotbarPrevious, EKeys::MouseScrollUp);
+	Map(Context, Config->HotbarPrevious, EKeys::Q);
+	// The number keys give their number (0 is the tenth).
+	const FKey NumberKeys[] = { EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five, EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine, EKeys::Zero };
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(NumberKeys); ++Index)
+	{
+		FEnhancedActionKeyMapping& Mapping = Context->MapKey(Config->HotbarSlot, NumberKeys[Index]);
+		UInputModifierScalar* Scale = NewObject<UInputModifierScalar>(Context);
+		Scale->Scalar = FVector(Index + 1);
+		Mapping.Modifiers.Add(Scale);
+	}
+
 	Map(Context, Config->Pause, EKeys::Escape);
 	Map(Context, Config->Pause, EKeys::P);
 	Map(Context, Config->Pause, EKeys::Gamepad_Special_Right);
+
+	// From above, W and Up walk up (Down already walks down): laid over the keys above, so they don't jump as well.
+	UInputMappingContext* TopDown = NewObject<UInputMappingContext>(Config, TEXT("IMC_OnyxTopDown"));
+	Config->TopDownMappingContext = TopDown;
+	Map(TopDown, Config->Up, EKeys::W);
+	Map(TopDown, Config->Up, EKeys::Up);
 
 	return Config;
 }
@@ -110,8 +156,18 @@ void UOnyxInputSubsystem::SetInputConfig(UOnyxInputConfig* Config)
 		{
 			EnhancedInput->RemoveMappingContext(ActiveConfig->MappingContext);
 		}
+		if (ActiveConfig && ActiveConfig->TopDownMappingContext)
+		{
+			EnhancedInput->RemoveMappingContext(ActiveConfig->TopDownMappingContext);
+		}
 	}
 	ActiveConfig = NewConfig;
+	ApplyMappingContext();
+}
+
+void UOnyxInputSubsystem::SetTopDown(bool bTopDown)
+{
+	bTopDownKeys = bTopDown;
 	ApplyMappingContext();
 }
 
@@ -121,5 +177,18 @@ void UOnyxInputSubsystem::ApplyMappingContext()
 	if (EnhancedInput && ActiveConfig && ActiveConfig->MappingContext && !EnhancedInput->HasMappingContext(ActiveConfig->MappingContext))
 	{
 		EnhancedInput->AddMappingContext(ActiveConfig->MappingContext, 0);
+	}
+	if (UInputMappingContext* TopDown = EnhancedInput && ActiveConfig ? ActiveConfig->TopDownMappingContext.Get() : nullptr)
+	{
+		// Above the controls, so its keys win over what they do there.
+		const bool bApplied = EnhancedInput->HasMappingContext(TopDown);
+		if (bTopDownKeys && !bApplied)
+		{
+			EnhancedInput->AddMappingContext(TopDown, 1);
+		}
+		else if (!bTopDownKeys && bApplied)
+		{
+			EnhancedInput->RemoveMappingContext(TopDown);
+		}
 	}
 }

@@ -2,10 +2,15 @@
 
 #include "Movement/OnyxMovementComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Core/OnyxLevelData.h"
 #include "Core/OnyxWorldSubsystem.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/Pawn.h"
 #include "World/OnyxWater.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogOnyxMovement, Log, All);
 
 namespace
 {
@@ -31,6 +36,12 @@ namespace
 	constexpr float BreathBubbleInterval = 2.4f;
 	/** Breath at which On Breath Low fires. */
 	constexpr float LowBreath = 0.25f;
+	/** A ledge's wall must be within this much of the capsule's side, cm. */
+	constexpr float LedgeWallReach = 14.f;
+	/** After letting go of a ledge: no grabbing for this long. */
+	constexpr float LedgeRegrabTime = 0.3f;
+	/** Pulling up onto a ledge rises for this part of the climb, then steps over the edge. */
+	constexpr float LedgeRisePart = 0.65f;
 }
 
 UOnyxMovementComponent::UOnyxMovementComponent()
@@ -46,6 +57,181 @@ void UOnyxMovementComponent::BeginPlay()
 {
 	Super::BeginPlay();
 	ApplyTuning();
+	if (CrouchHeightScale < 0.999f && CharacterOwner)
+	{
+		// Crouching and sliding use the engine's crouch: the capsule shrinks and only stands up again where there is room.
+		NavAgentProps.bCanCrouch = true;
+		bCanWalkOffLedgesWhenCrouching = true;
+		SetCrouchedHalfHeight(CharacterOwner->GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight() * CrouchHeightScale);
+	}
+	ApplyGameStyle(GetActiveGameStyle());
+}
+
+// ---------------------------------------------------------------------------
+// Game style
+// ---------------------------------------------------------------------------
+
+EOnyxGameStyle UOnyxMovementComponent::GetActiveGameStyle() const
+{
+	return bUseLevelGameStyle ? UOnyxLevelData::GetGameStyle(GetWorld()) : GameStyle;
+}
+
+void UOnyxMovementComponent::SetGameStyle(EOnyxGameStyle Style)
+{
+	bUseLevelGameStyle = false;
+	GameStyle = Style;
+	ApplyGameStyle(Style);
+}
+
+void UOnyxMovementComponent::ApplyGameStyle(EOnyxGameStyle Style)
+{
+	const bool bWantTopDown = Style == EOnyxGameStyle::TopDown;
+	if (!CharacterOwner || !UpdatedComponent || bWantTopDown == bTopDown)
+	{
+		return; // already moving this way (side view from the start: nothing to change)
+	}
+	UCapsuleComponent* Capsule = CharacterOwner->GetCapsuleComponent();
+	const float OldHalfHeight = Capsule->GetScaledCapsuleHalfHeight();
+	if (bWantTopDown)
+	{
+		// From above, the body that meets walls and blows is the ground the feet cover: a circle there.
+		SideCapsule = FVector2D(Capsule->GetUnscaledCapsuleRadius(), Capsule->GetUnscaledCapsuleHalfHeight());
+		const float Radius = FootprintRadius > 0.f ? FootprintRadius : SideCapsule.X;
+		Capsule->SetCapsuleSize(Radius, Radius, false);
+	}
+	else if (!SideCapsule.IsZero())
+	{
+		Capsule->SetCapsuleSize(SideCapsule.X, SideCapsule.Y, false);
+	}
+	// The feet stay where they were.
+	const float Drop = OldHalfHeight - Capsule->GetScaledCapsuleHalfHeight();
+	UpdatedComponent->SetWorldLocation(UpdatedComponent->GetComponentLocation() - FVector(0.f, 0.f, Drop), false, nullptr, ETeleportType::TeleportPhysics);
+	bTopDown = bWantTopDown;
+	Velocity = FVector::ZeroVector;
+	if (bTopDown)
+	{
+		bSliding = false;
+		bLedgeHanging = false;
+		bLedgeClimbing = false;
+		bWantsToCrouch = false;
+		SetMovementMode(MOVE_Custom, CMOVE_OnyxTopDown);
+	}
+	else
+	{
+		SetMovementMode(MOVE_Falling);
+	}
+	UE_LOG(LogOnyxMovement, Verbose, TEXT("%s: moves %s"), *GetNameSafe(GetOwner()), bTopDown ? TEXT("top down") : TEXT("side view"));
+}
+
+void UOnyxMovementComponent::SetDefaultMovementMode()
+{
+	if (bTopDown)
+	{
+		SetMovementMode(MOVE_Custom, CMOVE_OnyxTopDown);
+		return;
+	}
+	Super::SetDefaultMovementMode();
+}
+
+bool UOnyxMovementComponent::HandlePendingLaunch()
+{
+	if (!bTopDown || PendingLaunchVelocity.IsZero() || !HasValidData())
+	{
+		return Super::HandlePendingLaunch();
+	}
+	// Thrown across the ground (a blow): it keeps walking the ground, the speed wearing off at the braking rate.
+	Velocity = FVector(PendingLaunchVelocity.X, 0.f, PendingLaunchVelocity.Z);
+	PendingLaunchVelocity = FVector::ZeroVector;
+	bDashing = false;
+	if (MovementMode != MOVE_Custom || CustomMovementMode != CMOVE_OnyxTopDown)
+	{
+		SetMovementMode(MOVE_Custom, CMOVE_OnyxTopDown);
+	}
+	return true;
+}
+
+FVector2D UOnyxMovementComponent::GetStandingCapsule() const
+{
+	if (!SideCapsule.IsZero())
+	{
+		return SideCapsule;
+	}
+	const UCapsuleComponent* Capsule = CharacterOwner ? CharacterOwner->GetCapsuleComponent() : nullptr;
+	return Capsule ? FVector2D(Capsule->GetUnscaledCapsuleRadius(), Capsule->GetUnscaledCapsuleHalfHeight()) : FVector2D(20.f, 40.f);
+}
+
+FVector2D UOnyxMovementComponent::GetTopDownSteering() const
+{
+	if (!bTopDown || bMovementLocked || bDashing)
+	{
+		return FVector2D::ZeroVector;
+	}
+	// Moves added along X and Z (players: X; AI: both), plus up and down held (keys, the stick).
+	const float MaxInput = FMath::Max(GetMaxAcceleration(), 1.f);
+	const float Up = Acceleration.Z / MaxInput + VerticalInput + (bUpHeld ? 1.f : 0.f) - (bCrouchHeld ? 1.f : 0.f);
+	const FVector2D Steering(FMath::Clamp(Acceleration.X / MaxInput, -1.f, 1.f), FMath::Clamp(Up, -1.f, 1.f));
+	return Steering.SizeSquared() > 1.f ? Steering.GetSafeNormal() : Steering;
+}
+
+void UOnyxMovementComponent::MoveAndSlide(const FVector& Delta, float DeltaTime)
+{
+	FHitResult Hit(1.f);
+	SafeMoveUpdatedComponent(Delta, UpdatedComponent->GetComponentQuat(), true, Hit);
+	if (Hit.IsValidBlockingHit())
+	{
+		HandleImpact(Hit, DeltaTime, Delta);
+		SlideAlongSurface(Delta, 1.f - Hit.Time, Hit.Normal, Hit, true);
+		// No speed into the wall: what is left runs along it.
+		const FVector Normal = FVector(Hit.Normal.X, 0.f, Hit.Normal.Z).GetSafeNormal();
+		const float Into = FVector::DotProduct(Velocity, Normal);
+		if (Into < 0.f)
+		{
+			Velocity -= Normal * Into;
+		}
+	}
+}
+
+void UOnyxMovementComponent::PhysTopDown(float DeltaTime, int32 Iterations)
+{
+	if (DeltaTime < MIN_TICK_TIME)
+	{
+		return;
+	}
+	// In Onyx Water: wading through the shallows (slower), swimming beyond them (its swim speed, the water's slower turns).
+	const AOnyxWater* InWater = Water.Get();
+	const FVector Feet = UpdatedComponent->GetComponentLocation();
+	const float WaterDepth = InWater ? InWater->GetDepthFromAbove(Feet) : -1.f;
+	const bool bWasSwimming = bSwimmingFromAbove;
+	bSwimmingFromAbove = InWater && SwimSettings.bCanSwim && WaterDepth > InWater->ShoreWidth;
+	bWading = InWater && WaterDepth > 0.f && !bSwimmingFromAbove;
+	if (bSwimmingFromAbove != bWasSwimming)
+	{
+		(bSwimmingFromAbove ? OnStartedSwimming : OnStoppedSwimming).Broadcast();
+	}
+	const FVector2D Steering = GetTopDownSteering();
+	const float MaxSpeed = bSwimmingFromAbove ? SwimSettings.SwimSpeed : bWading ? GetMaxSpeed() * SwimSettings.WadeSpeedScale : GetMaxSpeed();
+	const FVector2D Current(Velocity.X, Velocity.Z);
+	const FVector2D Target = Steering * MaxSpeed;
+	// Speeding up and turning answer at once; let go, or faster than it walks (thrown by a blow, the end of a dash), the
+	// speed wears off at the braking rate and steering only bends it.
+	const bool bBraking = Steering.IsNearlyZero(0.05f) || Current.Size() > MaxSpeed * 1.05f;
+	const float Rate = bSwimmingFromAbove ? (bBraking ? SwimSettings.SwimBraking : SwimSettings.SwimAcceleration) : (bBraking ? GroundBraking : GroundAcceleration);
+	const FVector2D ToTarget = Target - Current;
+	const FVector2D Next = ToTarget.Size() <= Rate * DeltaTime ? Target : Current + ToTarget.GetSafeNormal() * Rate * DeltaTime;
+	Velocity = FVector(Next.X, 0.f, Next.Y);
+	if (InWater && bSwimmingFromAbove)
+	{
+		const FVector2D Flow = InWater->GetCurrentAt(Feet);
+		Velocity += FVector(Flow.X, 0.f, Flow.Y) * DeltaTime; // carried by the current
+	}
+	// A character that can't swim wades in no further than the shallows.
+	if (InWater && !SwimSettings.bCanSwim && InWater->GetDepthFromAbove(Feet + Velocity * DeltaTime) > InWater->ShoreWidth
+		&& InWater->GetDepthFromAbove(Feet + Velocity * DeltaTime) > WaterDepth)
+	{
+		Velocity = FVector::ZeroVector;
+		return;
+	}
+	MoveAndSlide(Velocity * DeltaTime, DeltaTime);
 }
 
 void UOnyxMovementComponent::ApplyTuning()
@@ -60,6 +246,7 @@ void UOnyxMovementComponent::ApplyTuning()
 	FallingLateralFriction = 0.f;
 	GravityScale = 1.f; // gravity comes from JumpSettings, see GetGravityZ()
 	JumpZVelocity = GetFullJumpVelocity();
+	SetWalkableFloorAngle(SlopeSettings.MaxWalkAngle);
 }
 
 #if WITH_EDITOR
@@ -115,22 +302,126 @@ float UOnyxMovementComponent::GetMaxSpeed() const
 	{
 		return DashSettings.Distance / FMath::Max(DashSettings.Duration, 0.01f);
 	}
+	if (bTopDown)
+	{
+		return MaxWalkSpeed * SpeedScale;
+	}
+	if (IsOnLedge())
+	{
+		return 0.f;
+	}
+	if (bSlopeSliding)
+	{
+		return SlopeSettings.MaxSlideSpeed;
+	}
+	if (bSliding)
+	{
+		// Slowing down from the start speed to the end speed over the slide.
+		const float Elapsed = 1.f - SlideTimer / FMath::Max(SlideSettings.Duration, 0.05f);
+		return FMath::Lerp(SlideStartSpeed, RunSpeed * SlideSettings.EndSpeedFraction, FMath::Clamp(Elapsed, 0.f, 1.f));
+	}
 	if (IsSwimmingInWater())
 	{
-		return SwimSettings.SwimSpeed;
+		return SwimSettings.SwimSpeed * SpeedScale;
 	}
 	if (IsCrouchingDown())
 	{
-		return Super::GetMaxSpeed() * CrouchSpeedScale;
+		return MaxWalkSpeed * CrouchSpeedScale * SpeedScale;
 	}
-	return Super::GetMaxSpeed();
+	return Super::GetMaxSpeed() * SpeedScale;
+}
+
+float UOnyxMovementComponent::GetMaxAcceleration() const
+{
+	return bSlopeSliding ? Super::GetMaxAcceleration() * SlopeSettings.SlideSteering : Super::GetMaxAcceleration();
+}
+
+float UOnyxMovementComponent::GetMaxBrakingDeceleration() const
+{
+	// Sliding down a wet slope nothing holds it back but the little steering it has.
+	return bSlopeSliding && MovementMode == MOVE_Walking ? 0.f : Super::GetMaxBrakingDeceleration();
+}
+
+void UOnyxMovementComponent::ApplySurfaceFlow(FVector2D Push, bool bWet)
+{
+	// Several streams at once add up within a frame; a call after the flow ran out starts afresh.
+	if (SurfaceFlowTimer <= 0.f)
+	{
+		SurfacePush = FVector2D::ZeroVector;
+		bSurfaceWet = false;
+	}
+	SurfacePush += Push;
+	bSurfaceWet |= bWet;
+	SurfaceFlowTimer = 0.12f;
+}
+
+void UOnyxMovementComponent::UpdateSlopes(float DeltaTime)
+{
+	SurfaceFlowTimer -= DeltaTime;
+	const bool bFlowing = SurfaceFlowTimer > 0.f;
+	if (!bFlowing && SurfaceFlowTimer < -1.f)
+	{
+		SurfacePush = FVector2D::ZeroVector;
+		bSurfaceWet = false;
+	}
+	const bool bOnGround = IsMovingOnGround() && CurrentFloor.IsWalkableFloor();
+	const FVector Normal = bOnGround ? CurrentFloor.HitResult.ImpactNormal : FVector::UpVector;
+	GroundSlope = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Normal.Z, -1.f, 1.f)));
+	const bool bSloped = bOnGround && GroundSlope > 5.f;
+	const bool bWasSliding = bSlopeSliding;
+	bSlopeSliding = bSloped && !bDashing && !bMovementLocked && !IsOnLedge()
+		&& ((bFlowing && bSurfaceWet) || (SlopeSettings.DrySlideAngle > 0.f && GroundSlope >= SlopeSettings.DrySlideAngle));
+	GroundFriction = bSlopeSliding ? 0.f : 8.f;
+	if (bSlopeSliding)
+	{
+		// Down the slope, sideways (walking keeps the speed level: the ground under it turns it into the slope).
+		const float Downhill = Normal.X >= 0.f ? 1.f : -1.f;
+		Velocity.X = FMath::Clamp(Velocity.X + Downhill * SlopeSettings.WetSlideAcceleration * DeltaTime, -SlopeSettings.MaxSlideSpeed, SlopeSettings.MaxSlideSpeed);
+	}
+	else if (bWasSliding && bOnGround)
+	{
+		// Off the bottom of a wet slope it keeps some of its speed (the braking takes the rest).
+		Velocity.X = FMath::Clamp(Velocity.X, -RunSpeed * 1.2f, RunSpeed * 1.2f);
+	}
+	if (bFlowing && !SurfacePush.IsNearlyZero() && !IsSwimmingInWater() && !bDashing && !IsOnLedge())
+	{
+		Velocity.X += SurfacePush.X * DeltaTime;
+		if (!bOnGround)
+		{
+			Velocity.Z += SurfacePush.Y * DeltaTime;
+		}
+	}
+
+	// The feet on the slope right under the middle: the capsule rests on it beside the middle.
+	float Foot = 0.f;
+	if (SlopeSettings.bFeetOnSlope && bSloped && CharacterOwner)
+	{
+		const UCapsuleComponent* Capsule = CharacterOwner->GetCapsuleComponent();
+		const float HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
+		const float Radius = Capsule->GetScaledCapsuleRadius();
+		const FVector Bottom = UpdatedComponent->GetComponentLocation() - FVector(0.f, 0.f, HalfHeight);
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(OnyxSlopeFoot), false, CharacterOwner);
+		FCollisionResponseParams Response;
+		InitCollisionParams(Params, Response);
+		FHitResult Hit;
+		if (GetWorld()->LineTraceSingleByChannel(Hit, Bottom + FVector(0.f, 0.f, 2.f), Bottom - FVector(0.f, 0.f, Radius * 2.f), UpdatedComponent->GetCollisionObjectType(), Params, Response))
+		{
+			// On flat ground the capsule hovers Floor Dist over it and the picture already allows for that.
+			Foot = FMath::Clamp(Hit.ImpactPoint.Z - Bottom.Z + CurrentFloor.FloorDist, -Radius * 1.5f, 0.f);
+		}
+	}
+	SlopeFootOffset = Foot;
 }
 
 FVector UOnyxMovementComponent::ConstrainInputAcceleration(const FVector& InputAcceleration) const
 {
-	if (bMovementLocked || bDashing)
+	if (bMovementLocked || bDashing || IsOnLedge())
 	{
 		return FVector::ZeroVector;
+	}
+	if (bSliding)
+	{
+		return FVector(SlideDirection, 0.f, 0.f); // carries on by itself, slowing down
 	}
 	const FVector Result = Super::ConstrainInputAcceleration(InputAcceleration);
 	return ControlLockTimer > 0.f ? Result * WallJumpSteeringScale : Result;
@@ -148,6 +439,60 @@ void UOnyxMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 	DropThroughTimer = FMath::Max(DropThroughTimer - DeltaTime, 0.f);
 	WaterExitTimer = FMath::Max(WaterExitTimer - DeltaTime, 0.f);
 	StrokeTimer = FMath::Max(StrokeTimer - DeltaTime, 0.f);
+	LedgeRegrabTimer = FMath::Max(LedgeRegrabTimer - DeltaTime, 0.f);
+	if (bTopDown)
+	{
+		// From above there is no jumping, crouching, walls to slide down, ledges or swimming: just walking and dashing.
+		JumpBufferTimer = 0.f;
+		bWantsToCrouch = false;
+		Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+		return;
+	}
+	if (IsFalling())
+	{
+		FallingSpeed = FMath::Max(FallingSpeed, -Velocity.Z);
+	}
+
+	// Down pressed while running: a slide.
+	const bool bCrouchPressed = bCrouchHeld && !bCrouchHeldBefore;
+	bCrouchHeldBefore = bCrouchHeld;
+	if (bCrouchPressed && SlideSettings.bEnabled && !bSliding && !bDashing && !bMovementLocked && IsMovingOnGround()
+		&& FMath::Abs(Velocity.X) >= RunSpeed * SlideSettings.MinSpeedFraction)
+	{
+		StartSlide();
+	}
+	if (bSliding)
+	{
+		SlideTimer -= DeltaTime;
+		if (SlideTimer <= 0.f || !IsMovingOnGround())
+		{
+			EndSlide();
+		}
+	}
+
+	// Ledges: Jump or Up climbs, Down or away lets go; falling past one while holding towards it catches it.
+	if (bLedgeHanging)
+	{
+		const float Steering = FMath::Sign(Acceleration.X);
+		if (JumpBufferTimer > 0.f || IsUpHeld())
+		{
+			JumpBufferTimer = 0.f;
+			StartLedgeClimb();
+		}
+		else if (bCrouchHeld || VerticalInput < -0.5f || (Steering != 0.f && Steering != LedgeDirection))
+		{
+			ReleaseLedge();
+		}
+	}
+	else if (LedgeSettings.bEnabled && !bLedgeClimbing && IsFalling() && Velocity.Z <= 0.f && !bDashing && !bMovementLocked && LedgeRegrabTimer <= 0.f)
+	{
+		const float Steering = FMath::Sign(Acceleration.X);
+		if (Steering != 0.f)
+		{
+			TryGrabLedge(Steering);
+		}
+	}
+	UpdateCrouch();
 	UpdateSwimming();
 	UpdateBreath(DeltaTime);
 	if (!IsSwimmingInWater())
@@ -161,6 +506,7 @@ void UOnyxMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 
 	UpdateOneWayPlatforms();
 	UpdateWallContact();
+	UpdateSlopes(DeltaTime);
 	TryConsumeJumpBuffer();
 	JumpBufferTimer = FMath::Max(JumpBufferTimer - DeltaTime, 0.f);
 
@@ -199,7 +545,7 @@ void UOnyxMovementComponent::JumpReleased()
 
 void UOnyxMovementComponent::TryConsumeJumpBuffer()
 {
-	if (JumpBufferTimer <= 0.f || bMovementLocked || bDashing || !CharacterOwner)
+	if (JumpBufferTimer <= 0.f || bMovementLocked || bDashing || IsOnLedge() || !CharacterOwner || bTopDown)
 	{
 		return;
 	}
@@ -238,6 +584,10 @@ void UOnyxMovementComponent::PerformJump(float Height, bool bAirJump)
 	JumpBufferTimer = 0.f;
 	++JumpsUsed;
 	bJumpActive = true;
+	if (bSliding)
+	{
+		EndSlide();
+	}
 
 	Velocity.Z = GetJumpVelocityForHeight(Height);
 	if (!bJumpHeld)
@@ -255,9 +605,11 @@ void UOnyxMovementComponent::PerformWallJump()
 {
 	JumpBufferTimer = 0.f;
 	JumpsUsed = 1;
-	bJumpActive = bJumpHeld;
+	bJumpActive = bJumpHeld && !WallSettings.bFullHeightWallJump; // not active: letting go doesn't cut it
 	bWallSliding = false;
 
+	UE_LOG(LogOnyxMovement, Verbose, TEXT("%s: wall jump off the %s wall at %s"), *GetNameSafe(GetOwner()), WallDirection < 0 ? TEXT("left") : TEXT("right"),
+		*UpdatedComponent->GetComponentLocation().ToCompactString());
 	Velocity = FVector(-WallDirection * WallSettings.WallJumpVelocity.X, 0.f, WallSettings.WallJumpVelocity.Y);
 	SetMovementMode(MOVE_Falling);
 	ControlLockTimer = WallSettings.ControlLockTime;
@@ -310,9 +662,15 @@ void UOnyxMovementComponent::UpdateWallContact()
 
 bool UOnyxMovementComponent::TryDash(float Direction)
 {
-	if (!DashSettings.bEnabled || bDashing || bMovementLocked || DashCooldownTimer > 0.f)
+	if (!DashSettings.bEnabled || bDashing || bMovementLocked || IsOnLedge() || DashCooldownTimer > 0.f)
 	{
 		return false;
+	}
+	if (bTopDown)
+	{
+		// Where it is steered, else straight to the side Direction says.
+		const FVector2D Steering = GetTopDownSteering();
+		return TryDashToward(Steering.IsNearlyZero(0.1f) ? FVector2D(Direction >= 0.f ? 1.f : -1.f, 0.f) : Steering);
 	}
 	if (IsSwimmingInWater())
 	{
@@ -327,6 +685,11 @@ bool UOnyxMovementComponent::TryDash(float Direction)
 		++AirDashesUsed;
 	}
 
+	if (bSliding)
+	{
+		EndSlide();
+	}
+	bDashFromGround = IsMovingOnGround();
 	DashDirection = Direction >= 0.f ? 1.f : -1.f;
 	DashTimer = DashSettings.Duration;
 	DashCooldownTimer = DashSettings.Duration + DashSettings.Cooldown;
@@ -334,6 +697,27 @@ bool UOnyxMovementComponent::TryDash(float Direction)
 	bJumpActive = false;
 	SetMovementMode(MOVE_Custom, CMOVE_OnyxDash);
 
+	OnDashed.Broadcast();
+	return true;
+}
+
+bool UOnyxMovementComponent::TryDashToward(FVector2D Direction)
+{
+	if (!bTopDown)
+	{
+		return TryDash(Direction.X);
+	}
+	if (!DashSettings.bEnabled || bDashing || bMovementLocked || DashCooldownTimer > 0.f)
+	{
+		return false;
+	}
+	DashVector = Direction.IsNearlyZero(0.01f) ? FVector2D(1.f, 0.f) : Direction.GetSafeNormal();
+	DashDirection = DashVector.X >= 0.f ? 1.f : -1.f;
+	bDashFromGround = true; // a roll along the ground
+	DashTimer = DashSettings.Duration;
+	DashCooldownTimer = DashSettings.Duration + DashSettings.Cooldown;
+	bDashing = true;
+	SetMovementMode(MOVE_Custom, CMOVE_OnyxDash);
 	OnDashed.Broadcast();
 	return true;
 }
@@ -350,7 +734,172 @@ void UOnyxMovementComponent::PhysCustom(float DeltaTime, int32 Iterations)
 		PhysSwim(DeltaTime, Iterations);
 		return;
 	}
+	if (CustomMovementMode == CMOVE_OnyxLedge)
+	{
+		PhysLedge(DeltaTime, Iterations);
+		return;
+	}
+	if (CustomMovementMode == CMOVE_OnyxTopDown)
+	{
+		PhysTopDown(DeltaTime, Iterations);
+		return;
+	}
 	Super::PhysCustom(DeltaTime, Iterations);
+}
+
+// ---------------------------------------------------------------------------
+// Crouch and slide
+// ---------------------------------------------------------------------------
+
+void UOnyxMovementComponent::UpdateCrouch()
+{
+	if (CrouchHeightScale >= 0.999f)
+	{
+		bWantsToCrouch = false;
+		return;
+	}
+	// The engine crouches before the next move and stands up again only where there is room overhead.
+	bWantsToCrouch = IsMovingOnGround() && !bDashing && (bCrouchHeld || bSliding);
+}
+
+void UOnyxMovementComponent::StartSlide()
+{
+	bSliding = true;
+	SlideDirection = Velocity.X >= 0.f ? 1.f : -1.f;
+	SlideStartSpeed = FMath::Max(FMath::Abs(Velocity.X), RunSpeed * SlideSettings.StartSpeedFraction);
+	SlideTimer = SlideSettings.Duration;
+	Velocity.X = SlideDirection * SlideStartSpeed;
+	OnSlideStarted.Broadcast();
+}
+
+void UOnyxMovementComponent::EndSlide()
+{
+	bSliding = false;
+	SlideTimer = 0.f;
+}
+
+// ---------------------------------------------------------------------------
+// Ledges
+// ---------------------------------------------------------------------------
+
+bool UOnyxMovementComponent::TryGrabLedge(float Direction)
+{
+	if (!CharacterOwner)
+	{
+		return false;
+	}
+	const UCapsuleComponent* Capsule = CharacterOwner->GetCapsuleComponent();
+	const float Radius = Capsule->GetScaledCapsuleRadius();
+	const float HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
+	const FVector Here = UpdatedComponent->GetComponentLocation();
+	const float HeadTop = Here.Z + HalfHeight;
+	const ECollisionChannel Channel = UpdatedComponent->GetCollisionObjectType();
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(OnyxLedgeProbe), false, CharacterOwner);
+	FCollisionResponseParams Response;
+	InitCollisionParams(Params, Response);
+	UWorld* World = GetWorld();
+
+	// Only the world has ledges: not another character (an enemy, an ally) it bumps into in the air.
+	auto IsCharacter = [](const FHitResult& Hit) { return Cast<APawn>(Hit.GetActor()) != nullptr; };
+
+	// A wall right in front at chest height...
+	FHitResult Wall;
+	const FVector Chest(Here.X, Here.Y, Here.Z + HalfHeight * 0.3f);
+	if (!World->LineTraceSingleByChannel(Wall, Chest, Chest + FVector(Direction * (Radius + LedgeWallReach), 0.f, 0.f), Channel, Params, Response)
+		|| FMath::Abs(Wall.ImpactNormal.Z) >= WallNormalMaxZ || IsOneWaySurface(Wall.GetComponent()) || IsCharacter(Wall))
+	{
+		return false;
+	}
+	// ...open air above it...
+	const FVector Above(Here.X, Here.Y, HeadTop + LedgeSettings.GrabReach);
+	FHitResult Blocked;
+	if (World->LineTraceSingleByChannel(Blocked, Above, Above + FVector(Direction * (Radius + LedgeWallReach + 8.f), 0.f, 0.f), Channel, Params, Response))
+	{
+		return false;
+	}
+	// ...and its top edge within reach of the hands.
+	FHitResult Top;
+	const float EdgeX = Wall.ImpactPoint.X + Direction * 6.f;
+	const FVector Down(EdgeX, Here.Y, HeadTop + LedgeSettings.GrabReach);
+	if (!World->LineTraceSingleByChannel(Top, Down, FVector(EdgeX, Here.Y, HeadTop - LedgeSettings.GrabReach), Channel, Params, Response)
+		|| Top.ImpactNormal.Z < 0.7f || IsCharacter(Top))
+	{
+		return false;
+	}
+	const float EdgeZ = Top.ImpactPoint.Z;
+	const float HangX = Wall.ImpactPoint.X - Direction * (Radius + 0.5f);
+	const FVector Hang(HangX, Here.Y, EdgeZ - LedgeSettings.HangDepth - HalfHeight);
+	const FVector Stand(Wall.ImpactPoint.X + Direction * (Radius + 2.f), Here.Y, EdgeZ + HalfHeight + 2.f);
+	// Room to pull up: straight up beside the wall, then over the edge.
+	const FCollisionShape Shape = FCollisionShape::MakeCapsule(Radius, HalfHeight);
+	if (World->OverlapBlockingTestByChannel(FVector(HangX, Here.Y, Stand.Z), FQuat::Identity, Channel, Shape, Params, Response)
+		|| World->OverlapBlockingTestByChannel(Stand, FQuat::Identity, Channel, Shape, Params, Response))
+	{
+		return false;
+	}
+
+	bLedgeHanging = true;
+	bLedgeClimbing = false;
+	LedgeDirection = Direction;
+	LedgeHangLocation = Hang;
+	LedgeStandLocation = Stand;
+	JumpBufferTimer = 0.f;
+	bJumpActive = false;
+	JumpsUsed = 0;
+	AirDashesUsed = 0;
+	Velocity = FVector::ZeroVector;
+	SetMovementMode(MOVE_Custom, CMOVE_OnyxLedge);
+	UpdatedComponent->SetWorldLocation(Hang, false, nullptr, ETeleportType::TeleportPhysics);
+	UE_LOG(LogOnyxMovement, Verbose, TEXT("%s: caught a ledge at %s (edge %.0f)"), *GetNameSafe(GetOwner()), *Hang.ToCompactString(), EdgeZ);
+	OnLedgeGrabbed.Broadcast();
+	return true;
+}
+
+void UOnyxMovementComponent::StartLedgeClimb()
+{
+	UE_LOG(LogOnyxMovement, Verbose, TEXT("%s: climbing up to %s"), *GetNameSafe(GetOwner()), *LedgeStandLocation.ToCompactString());
+	bLedgeHanging = false;
+	bLedgeClimbing = true;
+	LedgeTimer = LedgeSettings.ClimbTime;
+}
+
+void UOnyxMovementComponent::ReleaseLedge()
+{
+	UE_LOG(LogOnyxMovement, Verbose, TEXT("%s: let go of the ledge"), *GetNameSafe(GetOwner()));
+	bLedgeHanging = false;
+	bLedgeClimbing = false;
+	LedgeRegrabTimer = LedgeRegrabTime;
+	Velocity = FVector::ZeroVector;
+	SetMovementMode(MOVE_Falling);
+}
+
+void UOnyxMovementComponent::PhysLedge(float DeltaTime, int32 Iterations)
+{
+	Velocity = FVector::ZeroVector;
+	if (!bLedgeClimbing)
+	{
+		return; // hanging still
+	}
+	LedgeTimer -= DeltaTime;
+	const float Progress = FMath::Clamp(1.f - LedgeTimer / FMath::Max(LedgeSettings.ClimbTime, 0.05f), 0.f, 1.f);
+	FVector Location = LedgeHangLocation;
+	if (Progress < LedgeRisePart)
+	{
+		Location.Z = FMath::InterpEaseOut(LedgeHangLocation.Z, LedgeStandLocation.Z, Progress / LedgeRisePart, 2.f);
+	}
+	else
+	{
+		Location.Z = LedgeStandLocation.Z;
+		Location.X = FMath::Lerp(LedgeHangLocation.X, LedgeStandLocation.X, (Progress - LedgeRisePart) / (1.f - LedgeRisePart));
+	}
+	UpdatedComponent->SetWorldLocation(Location, false, nullptr, ETeleportType::TeleportPhysics);
+	if (Progress >= 1.f)
+	{
+		bLedgeClimbing = false;
+		SetMovementMode(MOVE_Walking);
+		UE_LOG(LogOnyxMovement, Verbose, TEXT("%s: up on the ledge at %s"), *GetNameSafe(GetOwner()), *UpdatedComponent->GetComponentLocation().ToCompactString());
+		OnLedgeClimbed.Broadcast();
+	}
 }
 
 void UOnyxMovementComponent::PhysDash(float DeltaTime, int32 Iterations)
@@ -360,15 +909,8 @@ void UOnyxMovementComponent::PhysDash(float DeltaTime, int32 Iterations)
 		return;
 	}
 
-	Velocity = FVector(DashDirection * GetMaxSpeed(), 0.f, 0.f);
-	const FVector Delta = Velocity * DeltaTime;
-
-	FHitResult Hit(1.f);
-	SafeMoveUpdatedComponent(Delta, UpdatedComponent->GetComponentQuat(), true, Hit);
-	if (Hit.IsValidBlockingHit())
-	{
-		SlideAlongSurface(Delta, 1.f - Hit.Time, Hit.Normal, Hit, true);
-	}
+	Velocity = bTopDown ? FVector(DashVector.X, 0.f, DashVector.Y) * GetMaxSpeed() : FVector(DashDirection * GetMaxSpeed(), 0.f, 0.f);
+	MoveAndSlide(Velocity * DeltaTime, DeltaTime);
 
 	DashTimer -= DeltaTime;
 	if (DashTimer <= 0.f)
@@ -377,9 +919,23 @@ void UOnyxMovementComponent::PhysDash(float DeltaTime, int32 Iterations)
 	}
 }
 
+void UOnyxMovementComponent::CancelDash()
+{
+	if (bDashing)
+	{
+		EndDash();
+	}
+}
+
 void UOnyxMovementComponent::EndDash()
 {
 	bDashing = false;
+	if (bTopDown)
+	{
+		Velocity = FVector(DashVector.X, 0.f, DashVector.Y) * RunSpeed;
+		SetMovementMode(MOVE_Custom, CMOVE_OnyxTopDown);
+		return;
+	}
 	Velocity = FVector(DashDirection * RunSpeed, 0.f, 0.f);
 	SetMovementMode(MOVE_Falling);
 }
@@ -390,6 +946,17 @@ void UOnyxMovementComponent::EndDash()
 
 void UOnyxMovementComponent::SetWater(AOnyxWater* InWater)
 {
+	// From above, several Onyx Waters can make one pond (rectangles side by side or overlapping, a pond of any shape): it
+	// keeps to the one it stands deepest in, so it swims wherever the pond is deep, not only well inside one rectangle.
+	const AOnyxWater* Current = Water.Get();
+	if (Current && InWater && Current != InWater && UpdatedComponent && IsTopDown())
+	{
+		const FVector Feet = UpdatedComponent->GetComponentLocation();
+		if (Current->GetDepthFromAbove(Feet) >= InWater->GetDepthFromAbove(Feet))
+		{
+			return;
+		}
+	}
 	Water = InWater;
 }
 
@@ -397,7 +964,34 @@ void UOnyxMovementComponent::ClearWater(const AOnyxWater* InWater)
 {
 	if (Water.Get() == InWater)
 	{
+		// Out of one rectangle of a pond but still in another: on into that one, without stopping and starting to swim.
+		if (UpdatedComponent && IsTopDown())
+		{
+			const FVector Feet = UpdatedComponent->GetComponentLocation();
+			AOnyxWater* Deepest = nullptr;
+			float Depth = 0.f;
+			for (TActorIterator<AOnyxWater> It(GetWorld()); It; ++It)
+			{
+				const float Here = *It != InWater ? It->GetDepthFromAbove(Feet) : 0.f;
+				if (Here > Depth)
+				{
+					Depth = Here;
+					Deepest = *It;
+				}
+			}
+			if (Deepest)
+			{
+				Water = Deepest;
+				return;
+			}
+		}
 		Water.Reset();
+		if (bSwimmingFromAbove)
+		{
+			bSwimmingFromAbove = false;
+			OnStoppedSwimming.Broadcast();
+		}
+		bWading = false;
 	}
 }
 
@@ -618,6 +1212,20 @@ void UOnyxMovementComponent::UpdateBreath(float DeltaTime)
 	}
 }
 
+bool UOnyxMovementComponent::IsUnderWater() const
+{
+	const AOnyxWater* CurrentWater = Water.Get();
+	if (!CurrentWater || !UpdatedComponent || bSwimmingFromAbove || !IsSwimmingInWater())
+	{
+		return false;
+	}
+	// Below the band the surface swimming keeps it in (where the head is out), as swimming itself tells them apart.
+	const FVector Location = UpdatedComponent->GetComponentLocation();
+	const float HalfHeight = GetCapsuleHalfHeight();
+	const float FloatZ = CurrentWater->GetSurfaceHeightAt(Location.X) - HalfHeight * FloatDepth;
+	return Location.Z <= FloatZ - HalfHeight * SurfaceBand;
+}
+
 void UOnyxMovementComponent::PhysSwim(float DeltaTime, int32 Iterations)
 {
 	if (DeltaTime < MIN_TICK_TIME)
@@ -667,7 +1275,7 @@ void UOnyxMovementComponent::PhysSwim(float DeltaTime, int32 Iterations)
 
 	if (CurrentWater)
 	{
-		const FVector2D Current = CurrentWater->GetCurrentAt(Location);
+		const FVector2D Current = CurrentWater->GetCurrentAt(Location) + (SurfaceFlowTimer > 0.f ? SurfacePush : FVector2D::ZeroVector);
 		Velocity.X += Current.X * DeltaTime;
 		Velocity.Z += Current.Y * DeltaTime;
 		if (SwimSettings.bFloatAtSurface && Location.Z > FloatZ)
@@ -801,14 +1409,31 @@ void UOnyxMovementComponent::OnMovementModeChanged(EMovementMode PreviousMovemen
 {
 	Super::OnMovementModeChanged(PreviousMovementMode, PreviousCustomMode);
 
-	if (PreviousMovementMode == MOVE_Custom && PreviousCustomMode == CMOVE_OnyxDash && MovementMode != MOVE_Custom)
+	if (PreviousMovementMode == MOVE_Custom && PreviousCustomMode == CMOVE_OnyxDash && !(MovementMode == MOVE_Custom && CustomMovementMode == CMOVE_OnyxDash))
 	{
 		bDashing = false;
+	}
+	if (bTopDown && MovementMode != MOVE_Custom && MovementMode != MOVE_None)
+	{
+		// From above nothing falls or walks a floor (a respawn, a teleport, the engine's defaults): back to the ground plane.
+		SetMovementMode(MOVE_Custom, CMOVE_OnyxTopDown);
+		return;
 	}
 	if (PreviousMovementMode == MOVE_Custom && PreviousCustomMode == CMOVE_OnyxSwim && !IsSwimmingInWater())
 	{
 		SwimDashTimer = 0.f;
 		DiveTimer = 0.f;
+	}
+	if (PreviousMovementMode == MOVE_Custom && PreviousCustomMode == CMOVE_OnyxLedge && !(MovementMode == MOVE_Custom && CustomMovementMode == CMOVE_OnyxLedge))
+	{
+		// Knocked off (a hit) or done climbing.
+		if (bLedgeHanging || bLedgeClimbing)
+		{
+			UE_LOG(LogOnyxMovement, Verbose, TEXT("%s: knocked off the ledge (now %s)"), *GetNameSafe(GetOwner()), *GetMovementName());
+			LedgeRegrabTimer = LedgeRegrabTime;
+		}
+		bLedgeHanging = false;
+		bLedgeClimbing = false;
 	}
 	if (MovementMode == MOVE_Walking && PreviousMovementMode != MOVE_Walking)
 	{
@@ -825,14 +1450,45 @@ void UOnyxMovementComponent::HandleLanded()
 	JumpsUsed = 0;
 	AirDashesUsed = 0;
 	bJumpActive = false;
+	LandingSpeed = FallingSpeed;
+	FallingSpeed = 0.f;
 	OnLandedEvent.Broadcast(); // a buffered jump fires on the next tick
 }
 
 EOnyxLocomotion UOnyxMovementComponent::GetLocomotionState() const
 {
+	if (bTopDown)
+	{
+		if (bDashing)
+		{
+			return EOnyxLocomotion::Roll;
+		}
+		if (bSwimmingFromAbove)
+		{
+			return EOnyxLocomotion::Swim;
+		}
+		const float GroundSpeed = FVector2D(Velocity.X, Velocity.Z).Size();
+		if (GroundSpeed <= RunThreshold)
+		{
+			return EOnyxLocomotion::Idle;
+		}
+		return WalkSpeedFraction > 0.f && GroundSpeed < RunSpeed * WalkSpeedFraction ? EOnyxLocomotion::Walk : EOnyxLocomotion::Run;
+	}
+	if (bLedgeClimbing)
+	{
+		return EOnyxLocomotion::LedgeClimb;
+	}
+	if (bLedgeHanging)
+	{
+		return EOnyxLocomotion::LedgeHang;
+	}
 	if (bDashing)
 	{
-		return EOnyxLocomotion::Dash;
+		return bDashFromGround ? EOnyxLocomotion::Roll : EOnyxLocomotion::Dash;
+	}
+	if (bSliding || bSlopeSliding)
+	{
+		return EOnyxLocomotion::Slide;
 	}
 	if (bWallSliding)
 	{
@@ -846,9 +1502,14 @@ EOnyxLocomotion UOnyxMovementComponent::GetLocomotionState() const
 	{
 		return Velocity.Z > 0.f ? EOnyxLocomotion::Jump : EOnyxLocomotion::Fall;
 	}
+	const float Speed = FMath::Abs(Velocity.X);
 	if (IsCrouchingDown())
 	{
-		return EOnyxLocomotion::Crouch;
+		return Speed > RunThreshold ? EOnyxLocomotion::CrouchWalk : EOnyxLocomotion::Crouch;
 	}
-	return FMath::Abs(Velocity.X) > RunThreshold ? EOnyxLocomotion::Run : EOnyxLocomotion::Idle;
+	if (Speed <= RunThreshold)
+	{
+		return EOnyxLocomotion::Idle;
+	}
+	return WalkSpeedFraction > 0.f && Speed < RunSpeed * WalkSpeedFraction ? EOnyxLocomotion::Walk : EOnyxLocomotion::Run;
 }

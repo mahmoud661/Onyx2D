@@ -11,6 +11,8 @@
 namespace
 {
 	constexpr float Padding = 8.f;
+	/** Between the tiles' slots: each tile reads as its own, never bleeding into the next. */
+	constexpr float Gap = 2.f;
 	const FIntPoint NoTile(INDEX_NONE, INDEX_NONE);
 
 	void Outline(FSlateWindowElementList& Out, int32 LayerId, const FGeometry& Geometry, const FVector2f& Min, const FVector2f& Size, const FLinearColor& Color, float Thickness)
@@ -23,6 +25,23 @@ namespace
 	{
 		const UTexture2D* Texture = Set ? Set->GetTileSheetTexture() : nullptr;
 		return Texture ? Texture->GetImportedSize() : FIntPoint::ZeroValue;
+	}
+
+	/** The texture as the GPU has it (a power-of-two padded sheet is bigger than the picture): what UVs are measured in. */
+	FVector2f SurfaceSize(const UPaperTileSet* Set)
+	{
+		const UTexture2D* Texture = Set ? Set->GetTileSheetTexture() : nullptr;
+		if (!Texture)
+		{
+			return FVector2f::ZeroVector;
+		}
+		const FVector2f Surface(Texture->GetSurfaceWidth(), Texture->GetSurfaceHeight());
+		return Surface.X > 0.f && Surface.Y > 0.f ? Surface : FVector2f(SheetSize(Set));
+	}
+
+	FIntPoint TileCount(const UPaperTileSet* Set)
+	{
+		return Set ? FIntPoint(Set->GetTileCountX(), Set->GetTileCountY()) : FIntPoint::ZeroValue;
 	}
 }
 
@@ -38,8 +57,9 @@ void SOnyxTilePalette::Construct(const FArguments& InArgs)
 
 float SOnyxTilePalette::GetScale(float Width) const
 {
-	const FIntPoint Size = SheetSize(TileSet.Get());
-	if (Size.X <= 0)
+	const UPaperTileSet* Set = TileSet.Get();
+	const FIntPoint Count = TileCount(Set);
+	if (Count.X <= 0 || !Set || Set->GetTileSize().X <= 0)
 	{
 		return 1.f;
 	}
@@ -48,28 +68,35 @@ float SOnyxTilePalette::GetScale(float Width) const
 	{
 		return Requested;
 	}
-	// Fit the width; snap to whole pixels only when that loses little space (display scaling makes small integers look tiny).
-	const float Fit = (Width - Padding * 2.f) / Size.X;
-	return Fit >= 3.f ? FMath::FloorToFloat(Fit) : FMath::Max(Fit, 0.1f);
+	// Fit the columns to the width; whole screen pixels per art pixel when that loses little space, so pixel art stays crisp.
+	const float Fit = (Width - Padding * 2.f - Gap * (Count.X - 1)) / float(Count.X * Set->GetTileSize().X);
+	return Fit >= 2.f ? FMath::FloorToFloat(Fit) : FMath::Max(Fit, 0.25f);
 }
 
 FVector2D SOnyxTilePalette::ComputeDesiredSize(float) const
 {
-	const FIntPoint Size = SheetSize(TileSet.Get());
-	if (Size.X <= 0)
+	const FIntPoint Count = TileCount(TileSet.Get());
+	if (Count.X <= 0 || Count.Y <= 0)
 	{
 		return FVector2D(200.f, 120.f);
 	}
-	const float Scale = GetScale(LastWidth);
-	// Fit mode follows the panel width; zoomed in, the sheet can grow and scroll.
-	const float Width = Zoom.Get() > 0.f ? Size.X * Scale + Padding * 2.f : 120.f;
-	return FVector2D(Width, Size.Y * Scale + Padding * 2.f);
+	const FVector2f Pitch = TilePitch(GetScale(LastWidth));
+	const FVector2f Content(Pitch.X * Count.X - Gap, Pitch.Y * Count.Y - Gap);
+	// Fit mode follows the panel width; zoomed in, the tiles can grow and scroll.
+	return FVector2D(Zoom.Get() > 0.f ? Content.X + Padding * 2.f : 120.f, Content.Y + Padding * 2.f);
+}
+
+FVector2f SOnyxTilePalette::TilePitch(float Scale) const
+{
+	const UPaperTileSet* Set = TileSet.Get();
+	return Set ? FVector2f(Set->GetTileSize()) * Scale + FVector2f(Gap) : FVector2f(Gap);
 }
 
 FVector2f SOnyxTilePalette::TileTopLeft(const FIntPoint& Tile, float Scale) const
 {
-	const FIntPoint UV = TileSet.Get()->GetTileUVFromTileXY(Tile);
-	return FVector2f(Padding + UV.X * Scale, Padding + UV.Y * Scale);
+	// Laid out by tile, not by where the tile sits in the sheet: the extruded edges of a padded sheet never show.
+	const FVector2f Pitch = TilePitch(Scale);
+	return FVector2f(Padding + Tile.X * Pitch.X, Padding + Tile.Y * Pitch.Y);
 }
 
 FIntPoint SOnyxTilePalette::TileAt(const FGeometry& Geometry, const FVector2D& ScreenPosition) const
@@ -79,21 +106,15 @@ FIntPoint SOnyxTilePalette::TileAt(const FGeometry& Geometry, const FVector2D& S
 	{
 		return NoTile;
 	}
-	const float Scale = GetScale(Geometry.GetLocalSize().X);
-	const FVector2f Local = FVector2f(Geometry.AbsoluteToLocal(ScreenPosition));
-	const FVector2f TileSize = FVector2f(Set->GetTileSize()) * Scale;
-	for (int32 Y = 0; Y < Set->GetTileCountY(); ++Y)
+	const FVector2f Local = FVector2f(Geometry.AbsoluteToLocal(ScreenPosition)) - FVector2f(Padding);
+	const FVector2f Pitch = TilePitch(GetScale(Geometry.GetLocalSize().X));
+	const FIntPoint Tile(FMath::FloorToInt(Local.X / Pitch.X), FMath::FloorToInt(Local.Y / Pitch.Y));
+	const FIntPoint Count = TileCount(Set);
+	if (Local.X < 0.f || Local.Y < 0.f || Tile.X >= Count.X || Tile.Y >= Count.Y)
 	{
-		for (int32 X = 0; X < Set->GetTileCountX(); ++X)
-		{
-			const FVector2f Min = TileTopLeft(FIntPoint(X, Y), Scale);
-			if (Local.X >= Min.X && Local.Y >= Min.Y && Local.X < Min.X + TileSize.X && Local.Y < Min.Y + TileSize.Y)
-			{
-				return FIntPoint(X, Y);
-			}
-		}
+		return NoTile;
 	}
-	return NoTile;
+	return Tile; // the gap after a tile counts as that tile: no dead lines when dragging across
 }
 
 int32 SOnyxTilePalette::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
@@ -113,21 +134,23 @@ int32 SOnyxTilePalette::OnPaint(const FPaintArgs& Args, const FGeometry& Allotte
 	}
 
 	const float Scale = GetScale(Area.X);
-	SheetBrush.SetResourceObject(Set->GetTileSheetTexture());
-	SheetBrush.ImageSize = FVector2D(TextureSize);
-	FSlateDrawElement::MakeBox(OutDrawElements, LayerId + 1,
-		AllottedGeometry.ToPaintGeometry(FVector2f(TextureSize.X * Scale, TextureSize.Y * Scale), FSlateLayoutTransform(FVector2f(Padding))), &SheetBrush);
-
-	// Grid.
 	const FVector2f TileDraw = FVector2f(Set->GetTileSize()) * Scale;
-	if (TileDraw.X >= 8.f)
+	const FVector2f Surface = SurfaceSize(Set);
+	SheetBrush.SetResourceObject(Set->GetTileSheetTexture());
+	SheetBrush.ImageSize = FVector2D(TileDraw);
+	for (int32 Y = 0; Y < Set->GetTileCountY(); ++Y)
 	{
-		for (int32 Y = 0; Y < Set->GetTileCountY(); ++Y)
+		for (int32 X = 0; X < Set->GetTileCountX(); ++X)
 		{
-			for (int32 X = 0; X < Set->GetTileCountX(); ++X)
-			{
-				Outline(OutDrawElements, LayerId + 2, AllottedGeometry, TileTopLeft(FIntPoint(X, Y), Scale), TileDraw, FLinearColor(1.f, 1.f, 1.f, 0.07f), 1.f);
-			}
+			// Its slot (an empty tile still shows where it is), then only that tile: its own square of the sheet.
+			const FVector2f Min = TileTopLeft(FIntPoint(X, Y), Scale);
+			FSlateDrawElement::MakeBox(OutDrawElements, LayerId + 1, AllottedGeometry.ToPaintGeometry(TileDraw, FSlateLayoutTransform(Min)),
+				FAppStyle::GetBrush("WhiteBrush"), ESlateDrawEffect::None, FLinearColor(0.05f, 0.056f, 0.066f));
+			const FIntPoint UV = Set->GetTileUVFromTileXY(FIntPoint(X, Y));
+			const FVector2f UVMin(UV.X / Surface.X, UV.Y / Surface.Y);
+			const FVector2f UVMax((UV.X + Set->GetTileSize().X) / Surface.X, (UV.Y + Set->GetTileSize().Y) / Surface.Y);
+			SheetBrush.SetUVRegion(FBox2f(UVMin, UVMax));
+			FSlateDrawElement::MakeBox(OutDrawElements, LayerId + 2, AllottedGeometry.ToPaintGeometry(TileDraw, FSlateLayoutTransform(Min)), &SheetBrush);
 		}
 	}
 

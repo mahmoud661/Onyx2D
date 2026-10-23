@@ -10,6 +10,7 @@
 #include "OnyxLightingSubsystem.generated.h"
 
 class AOnyxLightingEnvironment;
+class UOnyxPixelLightComponent;
 class UOnyxLight2DComponent;
 class UTexture;
 class UTextureRenderTarget2D;
@@ -31,6 +32,8 @@ public:
 	void UnregisterEnvironment(AOnyxLightingEnvironment* Environment);
 
 	void RegisterLight(UOnyxLight2DComponent* Light);
+	void RegisterPixelLight(UOnyxPixelLightComponent* Light);
+	void UnregisterPixelLight(UOnyxPixelLightComponent* Light);
 	void UnregisterLight(UOnyxLight2DComponent* Light);
 
 	/** Replaces the occluder edges contributed by Owner (tile collision, a shadow caster...). */
@@ -57,12 +60,28 @@ public:
 	/** The lighting subsystem of an object's world. */
 	static UOnyxLightingSubsystem* Get(const UObject* WorldContext);
 
+	/** The camera the 2D lighting follows: the player's in a game, the level viewport's in the editor. False when there is none yet. */
+	bool GetView(FOnyxLightView& OutView, FVector& OutViewTarget) const;
+
+	/** Every Onyx Light 2D in the world. */
+	TArray<const UOnyxLight2DComponent*> GetLights() const;
+	/** Every Onyx Pixel Light in the world. */
+	TArray<const UOnyxPixelLightComponent*> GetPixelLights() const;
+
 	/** The mood on screen right now (mid-blend values included). */
 	UFUNCTION(BlueprintPure, Category = "Onyx2D|Lighting")
 	FOnyxLightingMood GetCurrentMood() const { return Current; }
 
 	UTextureRenderTarget2D* GetLightBuffer() const { return LightTarget; }
 	UTextureRenderTarget2D* GetPositionBuffer() const { return PositionTarget; }
+	UTextureRenderTarget2D* GetOwnGlowBuffer() const { return OwnGlowTarget; }
+	UTextureRenderTarget2D* GetHaloBuffer() const { return HaloTarget; }
+
+	/** The level's Onyx Lighting (null when it has none). */
+	AOnyxLightingEnvironment* GetEnvironment() const { return Environment.Get(); }
+
+	/** What the last frame of light drawing did: lights drawn, shadows kept from earlier frames and shadows worked out. */
+	const FOnyxLightBufferStats& GetLastStats() const { return LastStats; }
 
 	/** Light buffer resolution relative to the screen (light is soft: half resolution is plenty). */
 	static constexpr float BufferScale = 0.5f;
@@ -75,7 +94,6 @@ public:
 	virtual void Deinitialize() override;
 
 private:
-	bool GetView(FOnyxLightView& OutView, FVector& OutViewTarget) const;
 	void UpdateMood(float DeltaTime, const FVector& ViewTarget);
 	/** Picks the wanted mood and its blend time; returns the object that asked for it. */
 	const UObject* ChooseMood(const FVector& ViewTarget, FOnyxLightingMood& OutMood, float& OutBlendTime) const;
@@ -84,9 +102,16 @@ private:
 
 	TWeakObjectPtr<AOnyxLightingEnvironment> Environment;
 	TArray<TWeakObjectPtr<UOnyxLight2DComponent>> Lights;
+	TArray<TWeakObjectPtr<UOnyxPixelLightComponent>> PixelLights;
 	TMap<TWeakObjectPtr<const UObject>, TArray<FOnyxOccluderSegment>> OccluderSets;
 	TArray<FOnyxOccluderSegment> AllOccluders;
 	bool bOccludersDirty = true;
+	/** Goes up whenever a wall or shadow caster changes: shadows kept for still lights are redone then. */
+	uint32 OccluderVersion = 0;
+	/** Each light's shadow, kept while it and the walls stay put. */
+	FOnyxLightShadowCaches ShadowCaches;
+	FOnyxLightBufferStats LastStats;
+	float StatsLogTimer = 0.f;
 	FOnyxLightView EditorView;
 
 	UPROPERTY(Transient)
@@ -94,6 +119,13 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTextureRenderTarget2D> PositionTarget;
+
+	/** The light that comes from own glows alone (taken off guarded sprites: Light Guard). */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextureRenderTarget2D> OwnGlowTarget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextureRenderTarget2D> HaloTarget;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTexture> Falloff;

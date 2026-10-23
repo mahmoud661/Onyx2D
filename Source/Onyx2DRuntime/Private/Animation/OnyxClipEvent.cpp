@@ -143,7 +143,8 @@ void UOnyxClipEvent_LightFlash::Fire(AActor* Owner, UOnyxMovesetComponent* Moves
 	{
 		const float Facing = Moveset ? Moveset->GetFacingSign() : 1.f;
 		const FVector Location = Owner->GetActorLocation() + FVector(Offset.X * Facing, 0.f, Offset.Y);
-		AOnyxLightFlash::Spawn(Owner, Location, Color, Intensity, Radius, Duration);
+		// The character's own light (its blade's flash): it lights what is around it more than itself.
+		AOnyxLightFlash::Spawn(Owner, Location, Color, Intensity, Radius, Duration, false, true);
 	}
 	Super::Fire(Owner, Moveset);
 }

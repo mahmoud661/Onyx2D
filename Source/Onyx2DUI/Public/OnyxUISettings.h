@@ -12,6 +12,7 @@ class UOnyxHUDWidget;
 class UOnyxMainMenu;
 class UOnyxPauseMenu;
 class USoundBase;
+class UTexture2D;
 
 /** Colors and fonts shared by every Onyx screen. */
 USTRUCT(BlueprintType)
@@ -113,4 +114,21 @@ public:
 	/** Messages and the conversation box (in every level but the main menu). */
 	UPROPERTY(Config, EditAnywhere, Category = "Screens")
 	TSoftClassPtr<UOnyxDialogueWidget> DialogueClass;
+
+	/**
+	 * The hotbar's look (Onyx Inventory): a slot, the selected slot, and the clock's panel (Onyx Calendar). Small
+	 * pixel-art textures, drawn at Pixel Art Scale; without them the HUD draws plain panels.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Hotbar")
+	TSoftObjectPtr<UTexture2D> SlotTexture;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Hotbar")
+	TSoftObjectPtr<UTexture2D> SelectedSlotTexture;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Hotbar")
+	TSoftObjectPtr<UTexture2D> ClockTexture;
+
+	/** Screen pixels per art pixel for the hotbar, the clock and item icons. */
+	UPROPERTY(Config, EditAnywhere, Category = "Hotbar", meta = (ClampMin = "1", ClampMax = "8"))
+	int32 PixelArtScale = 4;
 };

@@ -11,7 +11,8 @@ AOnyxLightFlash::AOnyxLightFlash()
 	RootComponent = Light2D;
 }
 
-AOnyxLightFlash* AOnyxLightFlash::Spawn(UObject* WorldContext, FVector Location, FLinearColor Color, float Intensity, float Radius, float InDuration, bool bCastShadows)
+AOnyxLightFlash* AOnyxLightFlash::Spawn(UObject* WorldContext, FVector Location, FLinearColor Color, float Intensity, float Radius, float InDuration, bool bCastShadows,
+	bool bOwnGlow)
 {
 	UWorld* World = WorldContext ? WorldContext->GetWorld() : nullptr;
 	if (!World)
@@ -27,6 +28,7 @@ AOnyxLightFlash* AOnyxLightFlash::Spawn(UObject* WorldContext, FVector Location,
 		Flash->Light2D->Intensity = Intensity;
 		Flash->Light2D->Radius = Radius;
 		Flash->Light2D->bCastShadows = bCastShadows;
+		Flash->Light2D->bOwnGlow = bOwnGlow;
 		Flash->StartIntensity = Intensity;
 		Flash->Duration = FMath::Max(InDuration, 0.02f);
 	}

@@ -21,7 +21,8 @@ enum class EOnyxPatrolStyle : uint8
 
 /**
  * The Patrol behaviour: walks, hops or flies back and forth, turning at walls (and ledges), and can chase the player
- * when they come close.
+ * when they come close. In a Top Down level it wanders round where it was placed instead (within Wander Radius), walking
+ * or hopping from spot to spot with a pause at each, round walls in the way.
  */
 UCLASS(ClassGroup = (Onyx2D), meta = (BlueprintSpawnableComponent))
 class ONYX2DRUNTIME_API UOnyxPatrolComponent : public UActorComponent
@@ -49,6 +50,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Patrol", meta = (ClampMin = "0", EditCondition = "bChasePlayer"))
 	float ChaseRange = 450.f;
+
+	/** Top down: how far from where it was placed it wanders, cm. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Patrol", meta = (ClampMin = "0", Units = "cm"))
+	float WanderRadius = 320.f;
 
 	/** Hop: seconds on the ground between hops. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Onyx2D|Patrol|Hop", meta = (ClampMin = "0.1", EditCondition = "Style == EOnyxPatrolStyle::Hop", EditConditionHides))
@@ -89,6 +94,13 @@ private:
 	void TickWalk(class ACharacter* Character);
 	void TickHop(class ACharacter* Character, float DeltaTime);
 	void TickFly(class ACharacter* Character, float DeltaTime);
+	/** Top down: from spot to spot round its home (hoppers in bursts), or after the player when close. */
+	void TickWander(class ACharacter* Character, float DeltaTime);
+	void PickWanderSpot();
+
+	FVector WanderSpot = FVector::ZeroVector;
+	float WanderTime = 0.f;
+	float WayBias = 1.f;
 
 	float PauseRemaining = 0.f;
 	float HopTimer = 0.f;

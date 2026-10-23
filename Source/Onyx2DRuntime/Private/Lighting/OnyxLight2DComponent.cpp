@@ -53,6 +53,24 @@ FVector2D UOnyxLight2DComponent::GetPlaneDirection() const
 	return Direction.IsNearlyZero() ? FVector2D(1.f, 0.f) : Direction.GetSafeNormal();
 }
 
+FVector2D UOnyxLight2DComponent::GetShapeHalfExtent() const
+{
+	switch (Shape)
+	{
+	case EOnyxLightShape::Line:
+		return FVector2D(FMath::Max(Length, 0.f) * 0.5f, 0.f);
+	case EOnyxLightShape::Area:
+		return FVector2D(FMath::Max(Size.X, 0.f) * 0.5f, FMath::Max(Size.Y, 0.f) * 0.5f);
+	default:
+		return FVector2D::ZeroVector;
+	}
+}
+
+float UOnyxLight2DComponent::GetReach() const
+{
+	return GetShapeHalfExtent().Size() + Radius;
+}
+
 void UOnyxLight2DComponent::OnRegister()
 {
 	Super::OnRegister();
@@ -76,5 +94,10 @@ void UOnyxLight2DComponent::PostEditChangeProperty(FPropertyChangedEvent& Event)
 {
 	Super::PostEditChangeProperty(Event);
 	IntensityScale = 1.f;
+	// Made a spot: a cone to start from, not a full circle.
+	if (Event.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UOnyxLight2DComponent, Shape) && Shape == EOnyxLightShape::Spot && ConeAngle >= 359.f)
+	{
+		ConeAngle = 60.f;
+	}
 }
 #endif

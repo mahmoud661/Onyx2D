@@ -13,4 +13,6 @@ UOnyx2DSettings::UOnyx2DSettings()
 	LightCompositeMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Onyx2D/Materials/PP_OnyxLight2D.PP_OnyxLight2D")));
 	LightingParameters = TSoftObjectPtr<UMaterialParameterCollection>(FSoftObjectPath(TEXT("/Onyx2D/Materials/MPC_OnyxLighting.MPC_OnyxLighting")));
 	LightHaloMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Onyx2D/Materials/M_OnyxLightHalo.M_OnyxLightHalo")));
+	FogMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Onyx2D/Materials/M_OnyxFogVolume.M_OnyxFogVolume")));
+	AfterimageMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Onyx2D/Materials/M_OnyxAfterimage.M_OnyxAfterimage")));
 }

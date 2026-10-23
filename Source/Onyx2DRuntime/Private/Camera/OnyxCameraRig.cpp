@@ -84,7 +84,14 @@ void FOnyxCameraFraming::UpdateLead(const FOnyxCameraSettings& Settings, const F
 		const float MaxX = Settings.LookAheadMax * ViewHalf.X;
 		const float MaxY = Settings.LookAheadMax * ViewHalf.Y;
 		WantedLead.X = FMath::Abs(Target.Velocity.X) > LeadMinSpeed ? FMath::Clamp(Target.Velocity.X * Settings.LookAheadTime, -MaxX, MaxX) : Lead.X;
-		WantedLead.Y = Settings.bLookAheadVertical ? FMath::Clamp(Target.Velocity.Y * Settings.LookAheadTime, -MaxY, MaxY) : 0.f;
+		if (Target.bTopDown)
+		{
+			WantedLead.Y = FMath::Abs(Target.Velocity.Y) > LeadMinSpeed ? FMath::Clamp(Target.Velocity.Y * Settings.LookAheadTime, -MaxY, MaxY) : Lead.Y;
+		}
+		else
+		{
+			WantedLead.Y = Settings.bLookAheadVertical ? FMath::Clamp(Target.Velocity.Y * Settings.LookAheadTime, -MaxY, MaxY) : 0.f;
+		}
 	}
 	Lead = FMath::Lerp(Lead, WantedLead, DampAlpha(Settings.LookAheadSmoothing, DeltaTime));
 

@@ -11,6 +11,8 @@ struct FOnyxCameraTarget
 	FVector2D Position = FVector2D::ZeroVector;
 	FVector2D Velocity = FVector2D::ZeroVector;
 	bool bGrounded = true;
+	/** Seen from above: up and down are walking, not jumping and falling (followed and looked ahead like left and right). */
+	bool bTopDown = false;
 };
 
 /**

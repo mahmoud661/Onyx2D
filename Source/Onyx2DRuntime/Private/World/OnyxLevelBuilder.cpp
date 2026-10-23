@@ -15,6 +15,11 @@
 #include "Engine/World.h"
 #include "Lighting/OnyxLight2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "PaperFlipbook.h"
+#include "PaperTileLayer.h"
+#include "PaperTileMap.h"
+#include "PaperTileMapComponent.h"
+#include "PaperTileSet.h"
 #include "UObject/ConstructorHelpers.h"
 #include "World/OnyxCheckpoint.h"
 #include "World/OnyxHazardVolume.h"
@@ -23,21 +28,27 @@
 #include "World/OnyxWater.h"
 #include "World/OnyxOneWayPlatform.h"
 #include "World/OnyxPickup.h"
+#include "World/OnyxTerrainMatch.h"
+
+/** The characters of a layout. */
+namespace OnyxLayoutChar
+{
+	constexpr TCHAR Solid = TEXT('#');
+	constexpr TCHAR Platform = TEXT('=');
+	constexpr TCHAR Spike = TEXT('^');
+	constexpr TCHAR Player = TEXT('P');
+	constexpr TCHAR Enemy = TEXT('E');
+	constexpr TCHAR Light = TEXT('L');
+	constexpr TCHAR Coin = TEXT('C');
+	constexpr TCHAR Health = TEXT('H');
+	constexpr TCHAR Checkpoint = TEXT('K');
+	constexpr TCHAR Exit = TEXT('X');
+	constexpr TCHAR MovingPlatform = TEXT('M');
+	constexpr TCHAR Water = TEXT('~');
+}
 
 namespace
 {
-	constexpr TCHAR SolidTile = TEXT('#');
-	constexpr TCHAR PlatformTile = TEXT('=');
-	constexpr TCHAR SpikeTile = TEXT('^');
-	constexpr TCHAR PlayerTile = TEXT('P');
-	constexpr TCHAR EnemyTile = TEXT('E');
-	constexpr TCHAR LightTile = TEXT('L');
-	constexpr TCHAR CoinTile = TEXT('C');
-	constexpr TCHAR HealthTile = TEXT('H');
-	constexpr TCHAR CheckpointTile = TEXT('K');
-	constexpr TCHAR ExitTile = TEXT('X');
-	constexpr TCHAR MovingPlatformTile = TEXT('M');
-	constexpr TCHAR WaterTile = TEXT('~');
 	constexpr float EngineCubeSize = 100.f;
 
 	const TCHAR* DemoLayout =
@@ -76,6 +87,15 @@ AOnyxLevelBuilder::AOnyxLevelBuilder()
 	Background->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Background->SetStaticMesh(BlockMesh);
 	Background->SetCastShadow(false);
+
+	Tiles = CreateDefaultSubobject<UPaperTileMapComponent>(TEXT("Tiles"));
+	Tiles->SetupAttachment(RootComponent);
+	Tiles->SetCollisionEnabled(ECollisionEnabled::NoCollision); // the blocks collide
+	Tiles->SetCanEverAffectNavigation(false);
+	Tiles->SetVisibility(false);
+#if WITH_EDITORONLY_DATA
+	Tiles->bShowOutlineWhenUnselected = false;
+#endif
 }
 
 void AOnyxLevelBuilder::OnConstruction(const FTransform& Transform)
@@ -101,7 +121,7 @@ bool AOnyxLevelBuilder::GetPlayerStart(FVector& OutLocation) const
 	const TArray<FString> Rows = GetRows();
 	for (int32 Row = 0; Row < Rows.Num(); ++Row)
 	{
-		const int32 Column = Rows[Row].Find(FString::Chr(PlayerTile), ESearchCase::CaseSensitive);
+		const int32 Column = Rows[Row].Find(FString::Chr(OnyxLayoutChar::Player), ESearchCase::CaseSensitive);
 		if (Column != INDEX_NONE)
 		{
 			OutLocation = TileToWorld(Column, Row, Rows.Num()) + FVector(0.f, 0.f, TileSize * 0.5f);
@@ -141,7 +161,7 @@ void AOnyxLevelBuilder::RebuildStatic()
 		MaxColumns = FMath::Max(MaxColumns, Rows[Row].Len());
 		for (int32 Column = 0; Column < Rows[Row].Len(); ++Column)
 		{
-			if (Rows[Row][Column] == SolidTile)
+			if (Rows[Row][Column] == OnyxLayoutChar::Solid)
 			{
 				const FVector Local = TileToWorld(Column, Row, Rows.Num()) - GetActorLocation();
 				Blocks->AddInstance(FTransform(FRotator::ZeroRotator, Local, Scale));
@@ -150,6 +170,11 @@ void AOnyxLevelBuilder::RebuildStatic()
 	}
 
 	UOnyx2DLibrary::ApplySolidColor(Blocks, BlockColor);
+
+	// With a tile set the tiles are what you see; the blocks stay, unseen, for collision.
+	const bool bTiled = TileSet && MaxColumns > 0 && PaintTiles(Rows, MaxColumns);
+	Blocks->SetVisibility(!bTiled);
+	Tiles->SetVisibility(bTiled);
 
 	Background->SetVisibility(bBuildBackground && Rows.Num() > 0);
 	if (bBuildBackground && Rows.Num() > 0)
@@ -161,6 +186,117 @@ void AOnyxLevelBuilder::RebuildStatic()
 		Background->SetRelativeScale3D(FVector(Width / EngineCubeSize, 0.1f, Height / EngineCubeSize));
 		UOnyx2DLibrary::ApplySolidColor(Background, BackgroundColor);
 	}
+}
+
+TArray<FString> AOnyxLevelBuilder::GetTerrainOptions() const
+{
+	TArray<FString> Names;
+	for (int32 Index = 0; TileSet && Index < TileSet->GetNumTerrains(); ++Index)
+	{
+		Names.Add(TileSet->GetTerrain(Index).TerrainName);
+	}
+	return Names;
+}
+
+int32 AOnyxLevelBuilder::FindTerrain() const
+{
+	if (!TileSet || TileSet->GetNumTerrains() == 0)
+	{
+		return INDEX_NONE;
+	}
+	return Terrain.IsEmpty() ? 0 : GetTerrainOptions().IndexOfByKey(Terrain);
+}
+
+bool AOnyxLevelBuilder::UsesPlatformTiles() const
+{
+	return TileSet && PlatformTile >= 0 && PlatformTile < TileSet->GetTileCount();
+}
+
+bool AOnyxLevelBuilder::PaintTiles(const TArray<FString>& Rows, int32 Columns)
+{
+	const int32 TerrainIndex = FindTerrain();
+	if (TerrainIndex == INDEX_NONE)
+	{
+		return false;
+	}
+	const FIntPoint TilePixels = TileSet->GetTileSize();
+	Tiles->CreateNewTileMap(Columns, Rows.Num(), TilePixels.X, TilePixels.Y, TilePixels.X / TileSize, true);
+	UPaperTileMap* Map = Tiles->TileMap;
+	Map->TileLayers[0]->SetLayerCollides(false);
+	if (UMaterialInterface* LitMaterial = UOnyx2DSettings::Get()->LitSpriteMaterial.LoadSynchronous())
+	{
+		Map->Material = LitMaterial;
+	}
+
+	auto IsSolid = [&Rows, Columns](int32 Column, int32 Row)
+	{
+		// Above the layout is open sky. Past its other edges counts as solid: walls and floors carry on out of view.
+		if (Row < 0)
+		{
+			return false;
+		}
+		if (Row >= Rows.Num() || Column < 0 || Column >= Columns)
+		{
+			return true;
+		}
+		return Column < Rows[Row].Len() && Rows[Row][Column] == OnyxLayoutChar::Solid;
+	};
+	auto Paint = [this](int32 Column, int32 Row, int32 TileIndex)
+	{
+		FPaperTileInfo Tile;
+		Tile.TileSet = TileSet;
+		Tile.PackedTileIndex = TileIndex;
+		Tiles->SetTile(Column, Row, 0, Tile);
+	};
+	auto ValidTile = [this](int32 TileIndex, int32 Fallback)
+	{
+		return TileIndex >= 0 && TileIndex < TileSet->GetTileCount() ? TileIndex : Fallback;
+	};
+	int32 TileForCorners[16];
+	for (int32& Tile : TileForCorners)
+	{
+		Tile = INDEX_NONE - 1; // not looked up yet
+	}
+	for (int32 Row = 0; Row < Rows.Num(); ++Row)
+	{
+		const FString& Line = Rows[Row];
+		for (int32 Column = 0; Column < Line.Len(); ++Column)
+		{
+			if (Line[Column] == OnyxLayoutChar::Solid)
+			{
+				bool Neighbours[3][3];
+				for (int32 DY = -1; DY <= 1; ++DY)
+				{
+					for (int32 DX = -1; DX <= 1; ++DX)
+					{
+						Neighbours[DY + 1][DX + 1] = IsSolid(Column + DX, Row + DY);
+					}
+				}
+				const uint8 Corners = FOnyxTerrainMatch::CornersFromNeighbours(Neighbours);
+				int32& Tile = TileForCorners[Corners];
+				Tile = Tile == INDEX_NONE - 1 ? FOnyxTerrainMatch::FindTile(TileSet, TerrainIndex, Corners) : Tile;
+				if (Tile != INDEX_NONE)
+				{
+					Paint(Column, Row, Tile);
+				}
+			}
+			else if (Line[Column] == OnyxLayoutChar::Platform && UsesPlatformTiles())
+			{
+				const bool bLeftEnd = Column == 0 || Line[Column - 1] != OnyxLayoutChar::Platform;
+				const bool bRightEnd = Column + 1 == Line.Len() || Line[Column + 1] != OnyxLayoutChar::Platform;
+				const int32 Tile = bLeftEnd && !bRightEnd ? ValidTile(PlatformLeftTile, PlatformTile)
+					: bRightEnd && !bLeftEnd ? ValidTile(PlatformRightTile, PlatformTile)
+					: PlatformTile;
+				Paint(Column, Row, Tile);
+			}
+		}
+	}
+
+	// Paper2D centres tile (0, 0) on the component and grows right and down: line that tile up with the layout's first one.
+	const FVector FirstTile = TileToWorld(0, 0, Rows.Num()) - GetActorLocation();
+	Tiles->SetRelativeLocation(FirstTile - Tiles->GetTileCenterPosition(0, 0, 0, false));
+	Tiles->MarkRenderStateDirty();
+	return true;
 }
 
 UClass* AOnyxLevelBuilder::ResolveEnemyClass() const
@@ -191,6 +327,13 @@ void AOnyxLevelBuilder::SpawnDynamic()
 	Params.Owner = this;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 
+	// Platforms drawn by the tiles hide their own bar; checkpoints and exits stand on the floor of their tile.
+	const bool bTiledPlatforms = Tiles->IsVisible() && UsesPlatformTiles();
+	auto OnFloor = [this](const FVector& Location, const UBoxComponent* Trigger)
+	{
+		return Location + FVector(0.f, 0.f, Trigger->GetUnscaledBoxExtent().Z - TileSize * 0.5f);
+	};
+
 	int32 MaxColumns = 0;
 	for (int32 Row = 0; Row < Rows.Num(); ++Row)
 	{
@@ -202,11 +345,11 @@ void AOnyxLevelBuilder::SpawnDynamic()
 			const FVector Location = TileToWorld(Column, Row, Rows.Num());
 			switch (Line[Column])
 			{
-			case PlatformTile:
+			case OnyxLayoutChar::Platform:
 			{
 				// Merge horizontal runs into one platform.
 				int32 End = Column;
-				while (End + 1 < Line.Len() && Line[End + 1] == PlatformTile)
+				while (End + 1 < Line.Len() && Line[End + 1] == OnyxLayoutChar::Platform)
 				{
 					++End;
 				}
@@ -216,14 +359,15 @@ void AOnyxLevelBuilder::SpawnDynamic()
 				{
 					Platform->Size = FVector2D(Count * TileSize, 24.f);
 					Platform->FinishSpawning(FTransform(Center));
+					Platform->Visual->SetVisibility(!bTiledPlatforms);
 				}
 				Column = End;
 				break;
 			}
-			case SpikeTile:
+			case OnyxLayoutChar::Spike:
 				World->SpawnActor<AOnyxHazardVolume>(AOnyxHazardVolume::StaticClass(), Location - FVector(0.f, 0.f, TileSize * 0.3f), FRotator::ZeroRotator, Params);
 				break;
-			case EnemyTile:
+			case OnyxLayoutChar::Enemy:
 				if (UClass* Enemy = ResolveEnemyClass())
 				{
 					AActor* Spawned = World->SpawnActor<AActor>(Enemy, Location + FVector(0.f, 0.f, TileSize * 0.2f), FRotator::ZeroRotator, Params);
@@ -239,46 +383,69 @@ void AOnyxLevelBuilder::SpawnDynamic()
 					}
 				}
 				break;
-			case LightTile:
+			case OnyxLayoutChar::Light:
 				if (LightClass)
 				{
 					World->SpawnActor<AActor>(LightClass, Location, FRotator::ZeroRotator, Params);
 				}
 				break;
-			case CoinTile:
-			case HealthTile:
+			case OnyxLayoutChar::Coin:
+			case OnyxLayoutChar::Health:
 				if (AOnyxPickup* Pickup = World->SpawnActorDeferred<AOnyxPickup>(AOnyxPickup::StaticClass(), FTransform(Location), this))
 				{
-					Pickup->Type = Line[Column] == CoinTile ? EOnyxPickupType::Coin : EOnyxPickupType::Health;
+					const bool bCoin = Line[Column] == OnyxLayoutChar::Coin;
+					Pickup->Type = bCoin ? EOnyxPickupType::Coin : EOnyxPickupType::Health;
+					if (UPaperFlipbook* Look = bCoin ? CoinLook : HealthLook)
+					{
+						Pickup->Flipbook = Look;
+					}
 					Pickup->FinishSpawning(FTransform(Location));
 				}
 				break;
-			case CheckpointTile:
-				World->SpawnActor<AOnyxCheckpoint>(AOnyxCheckpoint::StaticClass(), Location, FRotator::ZeroRotator, Params);
-				break;
-			case ExitTile:
-				if (AOnyxLevelExit* Exit = World->SpawnActorDeferred<AOnyxLevelExit>(AOnyxLevelExit::StaticClass(), FTransform(Location + FVector(0.f, 0.f, 40.f)), this))
+			case OnyxLayoutChar::Checkpoint:
+			{
+				const FTransform Where(OnFloor(Location, GetDefault<AOnyxCheckpoint>()->Trigger));
+				if (AOnyxCheckpoint* Checkpoint = World->SpawnActorDeferred<AOnyxCheckpoint>(AOnyxCheckpoint::StaticClass(), Where, this))
 				{
-					Exit->NextLevel = NextLevel;
-					Exit->FinishSpawning(FTransform(Location + FVector(0.f, 0.f, 40.f)));
+					if (CheckpointLook)
+					{
+						Checkpoint->DormantLook = CheckpointLook;
+						Checkpoint->ActiveLook = CheckpointActiveLook;
+					}
+					Checkpoint->FinishSpawning(Where);
 				}
 				break;
-			case WaterTile:
+			}
+			case OnyxLayoutChar::Exit:
+			{
+				const FTransform Where(OnFloor(Location, GetDefault<AOnyxLevelExit>()->Trigger));
+				if (AOnyxLevelExit* Exit = World->SpawnActorDeferred<AOnyxLevelExit>(AOnyxLevelExit::StaticClass(), Where, this))
+				{
+					Exit->NextLevel = NextLevel;
+					if (ExitLook)
+					{
+						Exit->Look = ExitLook;
+					}
+					Exit->FinishSpawning(Where);
+				}
+				break;
+			}
+			case OnyxLayoutChar::Water:
 			{
 				// A body of water: the run of ~ on this row, as deep as the rows below repeat it.
 				int32 End = Column;
-				while (End + 1 < Line.Len() && Line[End + 1] == WaterTile)
+				while (End + 1 < Line.Len() && Line[End + 1] == OnyxLayoutChar::Water)
 				{
 					++End;
 				}
-				const bool bStartedAbove = Row > 0 && Column < Rows[Row - 1].Len() && Rows[Row - 1][Column] == WaterTile;
+				const bool bStartedAbove = Row > 0 && Column < Rows[Row - 1].Len() && Rows[Row - 1][Column] == OnyxLayoutChar::Water;
 				if (!bStartedAbove)
 				{
 					auto IsWaterRow = [&Rows, Column, End](int32 Other)
 					{
 						for (int32 Cell = Column; Cell <= End; ++Cell)
 						{
-							if (Cell >= Rows[Other].Len() || Rows[Other][Cell] != WaterTile)
+							if (Cell >= Rows[Other].Len() || Rows[Other][Cell] != OnyxLayoutChar::Water)
 							{
 								return false;
 							}
@@ -301,10 +468,10 @@ void AOnyxLevelBuilder::SpawnDynamic()
 				Column = End;
 				break;
 			}
-			case MovingPlatformTile:
+			case OnyxLayoutChar::MovingPlatform:
 			{
 				int32 End = Column;
-				while (End + 1 < Line.Len() && Line[End + 1] == MovingPlatformTile)
+				while (End + 1 < Line.Len() && Line[End + 1] == OnyxLayoutChar::MovingPlatform)
 				{
 					++End;
 				}

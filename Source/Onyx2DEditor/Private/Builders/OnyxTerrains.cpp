@@ -1,7 +1,9 @@
 // Copyright Onyx2D. All Rights Reserved.
 
 #include "Builders/OnyxTerrains.h"
+#include "Engine/Texture2D.h"
 #include "PaperTileSet.h"
+#include "World/OnyxTerrainMatch.h"
 
 namespace
 {
@@ -13,11 +15,6 @@ namespace
 	int32 TileIndexAt(const UPaperTileSet* TileSet, const FIntPoint& Tile)
 	{
 		return Tile.Y * TileSet->GetTileCountX() + Tile.X;
-	}
-
-	int32 CountBits(uint8 Value)
-	{
-		return FMath::CountBits(Value);
 	}
 }
 
@@ -116,16 +113,7 @@ bool FOnyxTerrains::SetInnerCorners(UPaperTileSet* TileSet, int32 Terrain, const
 
 uint8 FOnyxTerrains::GetCorners(const UPaperTileSet* TileSet, int32 TileIndex, int32 Terrain)
 {
-	const FPaperTileMetadata* Metadata = TileSet ? TileSet->GetTileMetadata(TileIndex) : nullptr;
-	uint8 Corners = 0;
-	if (Metadata && Terrain >= 0)
-	{
-		for (int32 Slot = 0; Slot < 4; ++Slot)
-		{
-			Corners |= Metadata->TerrainMembership[Slot] == uint8(Terrain) ? SlotCorners[Slot] : 0;
-		}
-	}
-	return Corners;
+	return FOnyxTerrainMatch::GetCorners(TileSet, TileIndex, Terrain);
 }
 
 bool FOnyxTerrains::IsTerrainTile(const UPaperTileSet* TileSet, int32 TileIndex, int32 Terrain)
@@ -135,36 +123,107 @@ bool FOnyxTerrains::IsTerrainTile(const UPaperTileSet* TileSet, int32 TileIndex,
 
 int32 FOnyxTerrains::FindTile(const UPaperTileSet* TileSet, int32 Terrain, uint8 WantedCorners)
 {
-	if (!TileSet || Terrain < 0 || Terrain >= GetCount(TileSet))
+	return FOnyxTerrainMatch::FindTile(TileSet, Terrain, WantedCorners);
+}
+
+uint8 FOnyxTerrains::CornersFromNeighbours(const bool (&Neighbours)[3][3])
+{
+	return FOnyxTerrainMatch::CornersFromNeighbours(Neighbours);
+}
+
+int32 FOnyxTerrains::CreateFromArt(UPaperTileSet* TileSet, const FString& Name, const FColor& Background)
+{
+	UTexture2D* Sheet = TileSet ? TileSet->GetTileSheetTexture() : nullptr;
+	if (!Sheet || !Sheet->Source.IsValid() || Sheet->Source.GetFormat() != TSF_BGRA8 || GetCount(TileSet) >= int32(NoTerrain))
 	{
 		return INDEX_NONE;
 	}
-	// Closest corner pattern; ties go to the tile with more terrain (thin strips read as ground, not as gaps).
-	int32 Best = INDEX_NONE;
-	int32 BestScore = MAX_int32;
-	for (int32 TileIndex = 0; TileIndex < TileSet->GetTileCount(); ++TileIndex)
+	TArray64<uint8> Data;
+	Sheet->Source.GetMipData(Data, 0);
+	const FIntPoint SheetSize(Sheet->Source.GetSizeX(), Sheet->Source.GetSizeY());
+	const FColor* Pixels = reinterpret_cast<const FColor*>(Data.GetData());
+	auto IsArt = [&](int32 X, int32 Y)
 	{
-		const uint8 Corners = GetCorners(TileSet, TileIndex, Terrain);
-		if (Corners == 0)
+		if (X < 0 || Y < 0 || X >= SheetSize.X || Y >= SheetSize.Y)
+		{
+			return false;
+		}
+		const FColor& Pixel = Pixels[int64(Y) * SheetSize.X + X];
+		return Pixel.A > 0 && !(Pixel.R == Background.R && Pixel.G == Background.G && Pixel.B == Background.B);
+	};
+	// Art, and not a lone speck in the empty part (a star in the sky).
+	auto IsSolid = [&](int32 X, int32 Y)
+	{
+		if (!IsArt(X, Y))
+		{
+			return false;
+		}
+		for (int32 DY = -1; DY <= 1; ++DY)
+		{
+			for (int32 DX = -1; DX <= 1; ++DX)
+			{
+				if ((DX != 0 || DY != 0) && IsArt(X + DX, Y + DY))
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	};
+
+	TileSet->Modify();
+	const FIntPoint TileSize = TileSet->GetTileSize();
+	const int32 Terrain = GetCount(TileSet);
+	int32 Center = INDEX_NONE;
+	TMap<int32, uint8> Found;
+	for (int32 Tile = 0; Tile < TileSet->GetTileCount(); ++Tile)
+	{
+		FVector2D Corner;
+		if (!TileSet->GetTileUV(Tile, Corner))
 		{
 			continue;
 		}
-		const int32 Score = CountBits(Corners ^ WantedCorners) * 8 - CountBits(Corners & WantedCorners);
-		if (Score < BestScore)
+		const FIntPoint Min(FMath::RoundToInt(Corner.X), FMath::RoundToInt(Corner.Y));
+		// A 3 x 3 patch just inside each corner of the tile; mostly art = the corner is terrain.
+		auto Inside = [&](int32 StartX, int32 StartY)
 		{
-			BestScore = Score;
-			Best = TileIndex;
+			int32 Count = 0;
+			for (int32 Y = 0; Y < 3; ++Y)
+			{
+				for (int32 X = 0; X < 3; ++X)
+				{
+					Count += IsSolid(StartX + X, StartY + Y) ? 1 : 0;
+				}
+			}
+			return Count >= 5;
+		};
+		uint8 Corners = 0;
+		Corners |= Inside(Min.X, Min.Y) ? TopLeft : 0;
+		Corners |= Inside(Min.X + TileSize.X - 3, Min.Y) ? TopRight : 0;
+		Corners |= Inside(Min.X, Min.Y + TileSize.Y - 3) ? BottomLeft : 0;
+		Corners |= Inside(Min.X + TileSize.X - 3, Min.Y + TileSize.Y - 3) ? BottomRight : 0;
+		if (Corners != 0)
+		{
+			Found.Add(Tile, Corners);
+			Center = (Corners == All && Center == INDEX_NONE) ? Tile : Center;
 		}
 	}
-	return Best;
-}
-
-uint8 FOnyxTerrains::CornersFromNeighbours(const bool (&N)[3][3])
-{
-	uint8 Corners = 0;
-	Corners |= (N[0][0] && N[0][1] && N[1][0]) ? TopLeft : 0;
-	Corners |= (N[0][2] && N[0][1] && N[1][2]) ? TopRight : 0;
-	Corners |= (N[2][0] && N[2][1] && N[1][0]) ? BottomLeft : 0;
-	Corners |= (N[2][2] && N[2][1] && N[1][2]) ? BottomRight : 0;
-	return Corners;
+	if (Found.IsEmpty())
+	{
+		return INDEX_NONE;
+	}
+	FPaperTileSetTerrain Description;
+	Description.TerrainName = Name;
+	Description.CenterTileIndex = Center != INDEX_NONE ? Center : Found.CreateConstIterator().Key();
+	if (!TileSet->AddTerrainDescription(Description))
+	{
+		return INDEX_NONE;
+	}
+	for (const TPair<int32, uint8>& Pair : Found)
+	{
+		SetCorners(TileSet, Pair.Key, Terrain, Pair.Value);
+	}
+	TileSet->PostEditChange();
+	TileSet->MarkPackageDirty();
+	return Terrain;
 }
